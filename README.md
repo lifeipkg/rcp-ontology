@@ -45,6 +45,11 @@ python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace .. --r
 # 架构熵基线对比：契约仓在 <ref> 处与当前的声明层结论差集（新增/消失的 error+warn）
 python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace .. --baseline origin/main
 
+# 历史检查器看历史数据：用本体仓 <ref> 那版规则衡量基线，把"数据漂移"与"规则漂移"解耦。
+# 缺省用当前规则衡量基线——若基线早于"规则数据化"，会混入 E301/E302 这类"规则变严"的假漂移，
+# 此时应加 --checker-ref 指向与基线同时代的本体仓提交。
+python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace .. --baseline origin/main --checker-ref HEAD~1
+
 # 改一个服务之前，先看它会波及谁
 python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway
 

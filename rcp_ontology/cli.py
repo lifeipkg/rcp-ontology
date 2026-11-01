@@ -1,7 +1,7 @@
 """本体检查器 CLI。
 
 用法（文件路径直接执行或 -m 均可）：
-    python rcp_ontology/cli.py check --contracts ../rcp-contracts [--workspace .] [--json] [--baseline origin/main]
+    python rcp_ontology/cli.py check --contracts ../rcp-contracts [--workspace .] [--json] [--baseline origin/main] [--checker-ref HEAD~1]
     python rcp_ontology/cli.py render --contracts ../rcp-contracts --out SERVICES.md
     python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway
     python rcp_ontology/cli.py owners --contracts ../rcp-contracts [--out .github/CODEOWNERS]
@@ -26,6 +26,7 @@ from rcp_ontology.checks import check_all, check_declarations, diff_findings  # 
 from rcp_ontology.loader import (  # noqa: E402
     SCOPE_DECLARATION,
     SCOPE_WORKSPACE,
+    Finding,
     LoadError,
     load_concepts,
     load_registry,
@@ -33,18 +34,21 @@ from rcp_ontology.loader import (  # noqa: E402
 
 LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 
+# 本体仓根：cli.py 位于 <repo>/rcp_ontology/cli.py，向上两级即仓根。
+ONTOLOGY_ROOT = Path(__file__).resolve().parent.parent
+
 
 def _fmt(finding) -> str:
     tag = "[跨仓] " if finding.scope == SCOPE_WORKSPACE else ""
     return f"[{finding.level.upper():5}] {tag}{finding.code}: {finding.message}"
 
 
-def _extract_contracts_at(contracts: Path, ref: str) -> Path:
-    """把契约仓在 ref 处的快照解到临时目录，返回该目录（用于 --baseline）。"""
-    tmpdir = Path(tempfile.mkdtemp(prefix="rcp-ontology-baseline-"))
+def _extract_repo_at(repo: Path, ref: str) -> Path:
+    """把 git 仓 repo 在 ref 处的快照解到临时目录，返回该目录（用于基线/历史规则）。"""
+    tmpdir = Path(tempfile.mkdtemp(prefix="rcp-ontology-snapshot-"))
     archive = tmpdir / "snapshot.tar"
     result = subprocess.run(
-        ["git", "-C", str(contracts), "archive", "--output", str(archive), ref],
+        ["git", "-C", str(repo), "archive", "--output", str(archive), ref],
         capture_output=True,
         text=True,
     )
@@ -59,6 +63,39 @@ def _extract_contracts_at(contracts: Path, ref: str) -> Path:
             tf.extractall(tmpdir)
     archive.unlink()
     return tmpdir
+
+
+def _run_historical_check(checker_dir: Path, contracts_dir: Path) -> list[Finding]:
+    """用 checker_dir 里的历史检查器跑 contracts_dir，返回其声明层结论。
+
+    历史检查器作为独立进程运行（subprocess），完全隔离当前代码与历史代码，
+    避免模块缓存/依赖串扰。退出码 0（闭合）与 1（有 error）都算成功产出结论。
+    """
+    cli = checker_dir / "rcp_ontology" / "cli.py"
+    result = subprocess.run(
+        [sys.executable, str(cli), "check", "--contracts", str(contracts_dir), "--json"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode not in (0, 1):
+        raise RuntimeError(
+            f"历史检查器（{checker_dir.name}）运行失败: {result.stderr.strip() or '未知错误'}"
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"历史检查器输出不可解析: {exc}") from exc
+    findings: list[Finding] = []
+    for entry in payload.get("errors", []) + payload.get("warnings", []):
+        findings.append(
+            Finding(
+                entry.get("level", "error"),
+                entry.get("code", "?"),
+                entry.get("message", ""),
+                entry.get("scope", SCOPE_DECLARATION),
+            )
+        )
+    return findings
 
 
 def _decl_entropy(findings: list) -> list:
@@ -82,10 +119,17 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     # 先解析基线快照（若给），失败即输入错误，不产出半截结论。
     baseline_dir: Path | None = None
+    checker_dir: Path | None = None
     if args.baseline:
         try:
-            baseline_dir = _extract_contracts_at(contracts, args.baseline)
+            baseline_dir = _extract_repo_at(contracts, args.baseline)
+            if args.checker_ref:
+                checker_dir = _extract_repo_at(ONTOLOGY_ROOT, args.checker_ref)
         except RuntimeError as exc:
+            if baseline_dir:
+                shutil.rmtree(baseline_dir, ignore_errors=True)
+            if checker_dir:
+                shutil.rmtree(checker_dir, ignore_errors=True)
             print(f"[rcp-ontology] {exc}", file=sys.stderr)
             return 2
 
@@ -104,19 +148,26 @@ def cmd_check(args: argparse.Namespace) -> int:
     cross_repo_skipped = [f for f in infos if f.code == "S001"]
 
     # 架构熵漂移（--baseline）：基线声明层结论 vs 当前声明层结论的差集。
+    # 缺省用当前规则衡量基线（单一规则视角）；给 --checker-ref 则用该版本历史规则
+    # 衡量基线，把"数据变化"与"规则变化"解耦——这是"历史检查器看历史数据"。
     drift = None
     if baseline_dir is not None:
         try:
-            baseline_findings = check_declarations(baseline_dir, concepts_dir)
+            if checker_dir is not None:
+                baseline_findings = _run_historical_check(checker_dir, baseline_dir)
+            else:
+                baseline_findings = check_declarations(baseline_dir, concepts_dir)
             drift = diff_findings(
                 _decl_entropy(baseline_findings), _decl_entropy(findings)
             )
-        except LoadError as exc:
+        except (LoadError, RuntimeError) as exc:
             print(
                 f"[rcp-ontology] 基线声明不可用，跳过漂移对比: {exc}", file=sys.stderr
             )
         finally:
             shutil.rmtree(baseline_dir, ignore_errors=True)
+            if checker_dir:
+                shutil.rmtree(checker_dir, ignore_errors=True)
 
     if args.json:
         payload = {
@@ -130,6 +181,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         if drift is not None:
             payload["drift"] = {
                 "baseline": args.baseline,
+                "checker": args.checker_ref,
                 "scope": SCOPE_DECLARATION,
                 "added_count": len(drift["added"]),
                 "removed_count": len(drift["removed"]),
@@ -151,9 +203,10 @@ def cmd_check(args: argparse.Namespace) -> int:
         if drift is not None:
             added, removed = drift["added"], drift["removed"]
             net = len(added) - len(removed)
-            print(
-                f"\n架构熵基线对比（baseline: {args.baseline}，声明层 error/warn）："
-            )
+            label = f"baseline: {args.baseline}"
+            if args.checker_ref:
+                label += f"，历史规则 {args.checker_ref}"
+            print(f"\n架构熵基线对比（{label}，声明层 error/warn）：")
             print(
                 f"  新增 +{len(added)} 条 / 消失 -{len(removed)} 条，"
                 f"净漂移 {net:+d} 条"
@@ -311,6 +364,11 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--baseline",
         help="git 基线（如 HEAD~1 / origin/main），给出则追加架构熵漂移对比（声明层 error/warn 差集）",
+    )
+    check.add_argument(
+        "--checker-ref",
+        help="本体仓历史 ref，用该版本规则衡量基线（否则用当前规则）。与 --baseline 配对，"
+        "用于把数据漂移与规则漂移解耦",
     )
     check.add_argument(
         "--require-workspace",
