@@ -16,7 +16,6 @@ from rcp_ontology.checks import (
     check_contracts_exist,
     check_decision_alignment,
     check_dependency_graph,
-    check_redline_coverage,
     check_redlines,
     check_registry_shape,
     check_repo_registration,
@@ -27,10 +26,11 @@ from rcp_ontology.checks import (
     workspace_is_complete,
 )
 from rcp_ontology.layout import (
-    check_ddl_location,
-    check_hardcoded_upstream,
-    check_jdbc_in_business,
     is_worktree,
+    run_declared_scans,
+    run_file_scan,
+    run_registry_scan,
+    run_upstream_scan,
 )
 from rcp_ontology.loader import LoadError, SCOPE_WORKSPACE, read_yaml
 
@@ -245,15 +245,10 @@ def _pom_with(group: str, artifact: str) -> str:
     )
 
 
-def test_declared_redline_without_implementation_is_paper_redline():
+def test_redline_without_spec_is_paper_redline():
     redlines = {"constraints": [{"id": "RL-001"}, {"id": "RL-999"}], "exceptions": []}
-    findings = check_redline_coverage(redlines)
-    assert "E301" in codes(findings)
-
-
-def test_implemented_redline_not_declared_is_warning():
-    findings = check_redline_coverage({"constraints": [{"id": "RL-001"}], "exceptions": []})
-    assert "W302" in codes(findings, level="warn")
+    findings = check_rule_specs(redlines)
+    assert codes(findings) == {"E301"}
 
 
 def test_spec_unknown_type_is_error():
@@ -274,17 +269,12 @@ def test_spec_bad_regex_is_error():
     assert "E302" in codes(check_rule_specs(redlines))
 
 
-def test_spec_file_scan_needs_match_or_extract():
+def test_file_scan_without_match_is_error():
     redlines = {
         "constraints": [{"id": "RL-004", "spec": {"type": "file-scan", "include": ["*.sql"]}}],
         "exceptions": [],
     }
     assert "E302" in codes(check_rule_specs(redlines))
-
-
-def test_missing_spec_is_warning():
-    redlines = {"constraints": [{"id": "RL-001"}], "exceptions": []}
-    assert "W305" in codes(check_rule_specs(redlines), level="warn")
 
 
 def test_valid_spec_has_no_findings():
@@ -293,25 +283,54 @@ def test_valid_spec_has_no_findings():
             {"id": "RL-001", "spec": {"type": "registry-assert", "via": "kinds.allowed_depends_on_kinds"}},
             {"id": "RL-003", "spec": {"type": "cross-source", "sources": [], "assert": "identical"}},
             {"id": "RL-004", "spec": {"type": "file-scan", "include": ["*.sql"], "match": "create"}},
-            {"id": "RL-005", "spec": {"type": "file-scan", "include": ["pom.xml"], "extract": "dependency.groupId"}},
+            {"id": "RL-005", "spec": {"type": "registry-scan", "include": ["pom.xml"], "extract": "dependency.groupId", "deny_values": ["mysql"], "allow_kinds": ["data-gateway"]}},
+            {"id": "RL-007", "spec": {"type": "upstream-scan", "include": ["*.yml"], "scan_prefix": "rcp-ops/", "match": "http", "internal_hosts": {"from": "registry"}}},
         ],
         "exceptions": [],
     }
     assert check_rule_specs(redlines) == []
 
 
+DDL_SPEC = {
+    "type": "file-scan",
+    "include": ["*.sql"],
+    "allow_prefixes": ["rcp-ops/migrations/", "migrations/"],
+    "match": r"\b(?:create|alter|drop|truncate)\s+(?:table|index|view|database|schema|unique\s+index)\b",
+    "case_insensitive": True,
+}
+
+JDBC_SPEC = {
+    "type": "registry-scan",
+    "include": ["pom.xml"],
+    "extract": "dependency.groupId",
+    "deny_values": [
+        "mysql", "com.mysql", "com.mysql.jdbc", "org.postgresql",
+        "com.h2database", "com.oracle.database.jdbc", "org.mariadb.jdbc",
+    ],
+    "allow_kinds": ["data-gateway", "db-ops"],
+}
+
+UPSTREAM_SPEC = {
+    "type": "upstream-scan",
+    "scan_prefix": "rcp-ops/",
+    "include": ["*.yml", "*.yaml"],
+    "match": r"https?://([a-z][a-z0-9-]*):(\d{2,5})",
+    "internal_hosts": {"from": "registry", "where": "external == false"},
+}
+
+
 def test_ddl_outside_migrations_is_error(tmp_path: Path):
     repo = tmp_path / "rcp-content-patrol"
     repo.mkdir()
     (repo / "schema.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
-    assert "RL-004" in codes(check_ddl_location(tmp_path))
+    assert "RL-004" in codes(run_file_scan(DDL_SPEC, tmp_path, "RL-004"))
 
 
 def test_ddl_inside_migrations_is_allowed(tmp_path: Path):
     migrations = tmp_path / "rcp-ops" / "migrations"
     migrations.mkdir(parents=True)
     (migrations / "V1.0.0__init.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
-    assert check_ddl_location(tmp_path) == []
+    assert run_file_scan(DDL_SPEC, tmp_path, "RL-004") == []
 
 
 def test_ddl_in_detached_migrations_repo_is_allowed(tmp_path: Path):
@@ -319,7 +338,7 @@ def test_ddl_in_detached_migrations_repo_is_allowed(tmp_path: Path):
     migrations = tmp_path / "migrations"
     migrations.mkdir()
     (migrations / "V1.0.0__init.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
-    assert check_ddl_location(tmp_path) == []
+    assert run_file_scan(DDL_SPEC, tmp_path, "RL-004") == []
 
 
 def test_ddl_in_business_repo_migrations_dir_is_still_error(tmp_path: Path):
@@ -327,7 +346,7 @@ def test_ddl_in_business_repo_migrations_dir_is_still_error(tmp_path: Path):
     sneaky = tmp_path / "rcp-content-patrol" / "migrations"
     sneaky.mkdir(parents=True)
     (sneaky / "V9.9.9__hack.sql").write_text("ALTER TABLE t ADD c INT;", encoding="utf-8")
-    assert "RL-004" in codes(check_ddl_location(tmp_path))
+    assert "RL-004" in codes(run_file_scan(DDL_SPEC, tmp_path, "RL-004"))
 
 
 def test_ddl_inside_worktree_is_not_scanned_twice(tmp_path: Path):
@@ -336,7 +355,7 @@ def test_ddl_inside_worktree_is_not_scanned_twice(tmp_path: Path):
     wt.mkdir(parents=True)
     (wt / "V1.0.0__init.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
     (wt.parent / ".git").write_text("gitdir: ../../.git/worktrees/x\n", encoding="utf-8")
-    assert check_ddl_location(tmp_path) == []
+    assert run_file_scan(DDL_SPEC, tmp_path, "RL-004") == []
 
 
 def test_jdbc_driver_in_business_service_is_error(tmp_path: Path):
@@ -344,14 +363,14 @@ def test_jdbc_driver_in_business_service_is_error(tmp_path: Path):
     repo.mkdir()
     (repo / "pom.xml").write_text(_pom_with("com.mysql", "mysql-connector-j"), encoding="utf-8")
     registry = {"services": [service(), DATAWAY], "libraries": []}
-    assert "RL-005" in codes(check_jdbc_in_business(tmp_path, registry))
+    assert "RL-005" in codes(run_registry_scan(JDBC_SPEC, tmp_path, registry, "RL-005"))
 
 
 def test_jdbc_driver_in_data_gateway_is_allowed(tmp_path: Path):
     repo = tmp_path / "rcp-dataway"
     repo.mkdir()
     (repo / "pom.xml").write_text(_pom_with("com.mysql", "mysql-connector-j"), encoding="utf-8")
-    assert check_jdbc_in_business(tmp_path, {"services": [DATAWAY], "libraries": []}) == []
+    assert run_registry_scan(JDBC_SPEC, tmp_path, {"services": [DATAWAY], "libraries": []}, "RL-005") == []
 
 
 def _compose(tmp_path: Path, line: str) -> Path:
@@ -375,41 +394,61 @@ EXCEPTION = {
 
 def test_hardcoded_upstream_is_error(tmp_path: Path):
     _compose(tmp_path, UPSTREAM_LINE)
-    findings = check_hardcoded_upstream(tmp_path, {"services": [service()]})
+    findings = run_upstream_scan(UPSTREAM_SPEC, tmp_path, {"services": [service()]}, [], "RL-007")
     assert "RL-007" in codes(findings)
 
 
 def test_external_service_address_is_not_checked(tmp_path: Path):
     _compose(tmp_path, "      WEB_URL: http://web:5173")
-    assert check_hardcoded_upstream(tmp_path, {"services": [service()]}) == []
+    assert run_upstream_scan(UPSTREAM_SPEC, tmp_path, {"services": [service()]}, [], "RL-007") == []
 
 
 def test_registered_exception_downgrades_to_warning(tmp_path: Path):
     _compose(tmp_path, UPSTREAM_LINE)
-    findings = check_hardcoded_upstream(tmp_path, {"services": [service()]}, [EXCEPTION])
+    findings = run_upstream_scan(UPSTREAM_SPEC, tmp_path, {"services": [service()]}, [EXCEPTION], "RL-007")
     assert not codes(findings)
     assert "RL-007" in codes(findings, level="warn")
 
 
 def test_exception_without_scope_match_still_errors(tmp_path: Path):
     _compose(tmp_path, "      X: http://message-patrol:8082")
-    findings = check_hardcoded_upstream(tmp_path, {"services": [service(name="message-patrol", port=8082)]}, [EXCEPTION])
+    findings = run_upstream_scan(
+        UPSTREAM_SPEC, tmp_path,
+        {"services": [service(name="message-patrol", port=8082)]}, [EXCEPTION], "RL-007",
+    )
     assert "RL-007" in codes(findings)
 
 
 def test_expired_exception_is_error(tmp_path: Path):
     _compose(tmp_path, UPSTREAM_LINE)
     expired = {**EXCEPTION, "review_by": "2020-01-01"}
-    findings = check_hardcoded_upstream(tmp_path, {"services": [service()]}, [expired])
+    findings = run_upstream_scan(UPSTREAM_SPEC, tmp_path, {"services": [service()]}, [expired], "RL-007")
     assert "RL-007" in codes(findings)
 
 
 def test_workspace_findings_are_marked_cross_repo(tmp_path: Path):
     """跨仓结论必须带 scope 标记，调用方才分得清"这仓闭合"与"全平台闭合"。"""
     _compose(tmp_path, UPSTREAM_LINE)
-    findings = check_hardcoded_upstream(tmp_path, {"services": [service()]})
+    findings = run_upstream_scan(UPSTREAM_SPEC, tmp_path, {"services": [service()]}, [], "RL-007")
     assert findings and findings[0].scope != SCOPE_WORKSPACE  # layout 层本身不打标
-    assert check_ddl_location(tmp_path) == []
+    assert run_file_scan(DDL_SPEC, tmp_path, "RL-004") == []
+
+
+def test_new_file_scan_rule_runs_without_python_change(tmp_path: Path):
+    """规则即数据的验收：新增一条 file-scan 红线只需给 spec，解释器即执行。"""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "notes.txt").write_text("do not put secrets here", encoding="utf-8")
+    redlines = {
+        "constraints": [
+            {"id": "RL-099", "spec": {
+                "type": "file-scan", "include": ["*.txt"],
+                "match": "secrets", "message": "{rel} 含敏感词「{matched}」",
+            }},
+        ],
+        "exceptions": [],
+    }
+    findings = run_declared_scans(redlines, tmp_path, {"services": [], "libraries": []})
+    assert "RL-099" in codes(findings)
 
 
 def test_unregistered_repo_directory_is_error(tmp_path: Path):

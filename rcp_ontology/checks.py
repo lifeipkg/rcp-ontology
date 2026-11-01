@@ -24,12 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from . import graph as G
-from .layout import (
-    check_ddl_location,
-    check_hardcoded_upstream,
-    check_jdbc_in_business,
-    is_worktree,
-)
+from .layout import is_worktree, run_declared_scans
 from .loader import (
     SCOPE_WORKSPACE,
     Finding,
@@ -49,21 +44,15 @@ CAPABILITY_NAME = re.compile(r"^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$")
 # TBox 上必须显式声明的布尔属性。缺省推断会让人误判检查器行为，因此要求写全。
 KIND_BOOL_PROPS = ("must_be_external", "is_entry", "requires_port", "requires_contract")
 
-# 检查器有能力判定的红线编号。新增红线先在实现侧登记，再写进 redlines.yaml；
-# 只写 YAML 不写实现会被 E301 判为纸面红线。
-IMPLEMENTED_REDLINES = frozenset(
-    {"RL-001", "RL-002", "RL-003", "RL-004", "RL-005", "RL-006", "RL-007"}
-)
-
-# 规则规格（policy-as-code 第一步）已知的执行器类型与必填字段。
-# 每条红线的 spec.type 必须落在其中，缺必填字段即 E302。
-# 注意：本步只校验 spec 的"合法性"（能否被未来的解释器解析），
-# 执行仍由 IMPLEMENTED_REDLINES 对应的硬编码承担；规格与实现的等价
-# 由引擎化（下一步）用 diff 验收保证，不由本校验宣称。
+# 规则规格（policy-as-code）已知的执行器类型与必填字段。
+# 每条红线的 spec.type 决定执行器，缺必填字段即 E302；无 spec 即 E301（纸面红线）。
+# 新增一条已支持类型的红线只需在 redlines.yaml 写 spec，无需改本文件或登记实现清单。
 RULE_SPEC_TYPES: dict[str, dict[str, tuple[str, ...]]] = {
     "registry-assert": {"required": ("via",)},
     "cross-source": {"required": ("sources", "assert")},
-    "file-scan": {"required": ("include",)},
+    "file-scan": {"required": ("include", "match")},
+    "registry-scan": {"required": ("include", "extract", "deny_values", "allow_kinds")},
+    "upstream-scan": {"required": ("include", "scan_prefix", "match", "internal_hosts")},
 }
 
 
@@ -179,14 +168,27 @@ def check_redlines(registry: dict[str, Any], concepts: dict[str, list[dict[str, 
 def check_decision_alignment(
     contracts_root: Path,
     concepts: dict[str, list[dict[str, Any]]],
+    spec: dict[str, Any] | None = None,
 ) -> list[Finding]:
-    """RL-003 决策枚举在契约层与本体层逐字一致，且分值一致。"""
+    """RL-003 决策枚举在契约层与本体层逐字一致，且分值一致。
+
+    字段名（enum / x-base-score / base_score / code）从 redlines.yaml 的 RL-003
+    spec 读取；缺省退回既有字段名（兼容直接调用）。
+    """
+    spec = spec or {}
+    sources = spec.get("sources") or []
+    enum_field = (sources[0].get("field") if sources else None) or "enum"
+    code_key = (sources[1].get("key") if len(sources) > 1 else None) or "code"
+    fields = spec.get("fields") or [{"a": "x-base-score", "b": "base_score"}]
+    score_a = fields[0].get("a", "x-base-score")
+    score_b = fields[0].get("b", "base_score")
+
     try:
-        contract_enum = load_decision_schema(contracts_root)
+        contract_enum = load_decision_schema(contracts_root, enum_field)
     except Exception as exc:  # noqa: BLE001 - 缺文件即红
         return [Finding("error", "RL-003", f"无法读取契约层决策枚举: {exc}")]
 
-    concept_codes = [item.get("code") for item in concepts["decisions"]]
+    concept_codes = [item.get(code_key) for item in concepts["decisions"]]
     findings: list[Finding] = []
     if contract_enum != concept_codes:
         findings.append(
@@ -198,9 +200,9 @@ def check_decision_alignment(
         )
         return findings
 
-    scores = _load_contract_scores(contracts_root)
+    scores = _load_contract_scores(contracts_root, score_a)
     if scores is not None:
-        concept_scores = {i.get("code"): i.get("base_score") for i in concepts["decisions"]}
+        concept_scores = {i.get(code_key): i.get(score_b) for i in concepts["decisions"]}
         mismatch = [
             f"{code}: 契约={score} 本体={concept_scores.get(code)}"
             for code, score in scores.items()
@@ -213,14 +215,14 @@ def check_decision_alignment(
     return findings
 
 
-def _load_contract_scores(contracts_root: Path) -> dict[str, Any] | None:
-    """读 decision.yaml 的 x-base-score。没有该段就当未声明分值。"""
+def _load_contract_scores(contracts_root: Path, field: str = "x-base-score") -> dict[str, Any] | None:
+    """读 decision.yaml 的分值字段（缺省 x-base-score）。没有该段就当未声明分值。"""
     path = contracts_root / "contracts" / "schemas" / "decision.yaml"
     try:
         data = read_yaml(path) or {}
     except Exception:  # noqa: BLE001
         return None
-    scores = data.get("x-base-score")
+    scores = data.get(field)
     return scores if isinstance(scores, dict) else None
 
 
@@ -276,37 +278,12 @@ def check_contracts_exist(
     return findings
 
 
-def check_redline_coverage(redlines: dict[str, Any]) -> list[Finding]:
-    """E301 声明了但检查器没有实现（纸面红线）/ W302 有实现但未登记。
-
-    这是防"红线只写在 YAML 里、CI 根本判不了"的元检查。新增红线必须先在本文件的
-    IMPLEMENTED_REDLINES 登记实现，再写进 redlines.yaml，否则本检查即红。
-    """
-    findings: list[Finding] = []
-    declared = [c.get("id") for c in redlines.get("constraints", [])]
-    for redline_id in declared:
-        if redline_id not in IMPLEMENTED_REDLINES:
-            findings.append(
-                Finding(
-                    "error",
-                    "E301",
-                    f"{redline_id} 在 redlines.yaml 声明，但检查器没有对应实现（纸面红线）",
-                )
-            )
-    for redline_id in sorted(IMPLEMENTED_REDLINES - set(declared)):
-        findings.append(
-            Finding("warn", "W302", f"{redline_id} 有实现，但未在 redlines.yaml 登记")
-        )
-    return findings
-
-
 def check_rule_specs(redlines: dict[str, Any]) -> list[Finding]:
-    """E302 规则规格不合法 / W305 红线未参数化。
+    """E301 纸面红线 / E302 spec 不合法。
 
-    spec 是 redlines.yaml 里机器可读的检查规格（policy-as-code 第一步）。
-    只做机械判定：type 是否已知、必填字段是否齐全、正则能否编译、
-    file-scan 是否具备定位手段（match 或 extract）。不校验"规格与实现
-    是否等价"——那是引擎化（下一步）由 diff 验收负责的。
+    规则即数据后，"是否可执行"由 spec 决定：无 spec 即无执行器（E301 纸面红线）；
+    spec.type 未知、缺必填字段、正则无法编译即 E302。新增红线只需给 spec，
+    不再需要在本文件登记实现清单——实现清单已退化为 RULE_SPEC_TYPES 的执行器类型。
     """
     findings: list[Finding] = []
     for constraint in redlines.get("constraints", []):
@@ -314,7 +291,12 @@ def check_rule_specs(redlines: dict[str, Any]) -> list[Finding]:
         spec = constraint.get("spec")
         if not isinstance(spec, dict):
             findings.append(
-                Finding("warn", "W305", f"{redline_id} 缺 spec 声明（规则未参数化）")
+                Finding(
+                    "error",
+                    "E301",
+                    f"{redline_id} 在 redlines.yaml 声明，但无 spec 规格，"
+                    f"检查器无法执行（纸面红线）",
+                )
             )
             continue
 
@@ -338,15 +320,6 @@ def check_rule_specs(redlines: dict[str, Any]) -> list[Finding]:
                     "error",
                     "E302",
                     f"{redline_id}（{spec_type}）缺必填字段: {', '.join(missing)}",
-                )
-            )
-
-        if spec_type == "file-scan" and "match" not in spec and "extract" not in spec:
-            findings.append(
-                Finding(
-                    "error",
-                    "E302",
-                    f"{redline_id}（file-scan）既无 match 也无 extract，无法定位命中",
                 )
             )
 
@@ -591,6 +564,15 @@ def check_repo_registration(
     return findings
 
 
+def _spec_by_id(redlines: dict[str, Any], redline_id: str) -> dict[str, Any] | None:
+    """取某条红线在 redlines.yaml 里声明的 spec（供跨源比对等专用执行器使用）。"""
+    for constraint in redlines.get("constraints", []):
+        if constraint.get("id") == redline_id:
+            spec = constraint.get("spec")
+            return spec if isinstance(spec, dict) else None
+    return None
+
+
 def check_all(
     contracts_root: Path,
     concepts_dir: Path | None = None,
@@ -611,11 +593,10 @@ def check_all(
     complete = workspace_is_complete(workspace_root, registry)
 
     findings: list[Finding] = []
-    findings += check_redline_coverage(redlines)
     findings += check_rule_specs(redlines)
     findings += check_registry_shape(registry, concepts)
     findings += check_redlines(registry, concepts)
-    findings += check_decision_alignment(contracts_root, concepts)
+    findings += check_decision_alignment(contracts_root, concepts, _spec_by_id(redlines, "RL-003"))
     findings += check_tbox_abox(registry, concepts)
     findings += check_contracts_exist(contracts_root, registry, concepts)
     findings += check_tbox_integrity(concepts)
@@ -626,17 +607,8 @@ def check_all(
 
     workspace_findings: list[Finding] = []
     workspace_findings += [
-        replace(f, scope=SCOPE_WORKSPACE) for f in check_ddl_location(workspace_root)
-    ]
-    workspace_findings += [
         replace(f, scope=SCOPE_WORKSPACE)
-        for f in check_jdbc_in_business(workspace_root, registry)
-    ]
-    workspace_findings += [
-        replace(f, scope=SCOPE_WORKSPACE)
-        for f in check_hardcoded_upstream(
-            workspace_root, registry, redlines.get("exceptions", [])
-        )
+        for f in run_declared_scans(redlines, workspace_root, registry)
     ]
     workspace_findings += check_repo_registration(workspace_root, registry, complete)
     findings += workspace_findings

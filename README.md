@@ -85,13 +85,11 @@ python -m pytest -q
 
 | 编号 | 判据 | 级别 |
 |---|---|---|
-| E301 | 红线在 `redlines.yaml` 声明但检查器无实现（纸面红线） | error |
-| E302 | 红线的 `spec` 规格不合法（type 未知 / 缺必填字段 / 正则无法编译 / file-scan 无定位手段） | error |
+| E301 | 红线在 `redlines.yaml` 声明但无 `spec` 规格，检查器无法执行（纸面红线） | error |
+| E302 | 红线的 `spec` 规格不合法（type 未知 / 缺必填字段 / 正则无法编译） | error |
 | W301 | capability 立名但无服务使用 | warn |
-| W302 | 红线有实现但未在 `redlines.yaml` 登记 | warn |
 | W303 | 种类未在 `terms.yaml` 立名（`covers` 缺失） | warn |
 | W304 | 能力除 owner 外还有别的实现者（多实现未声明） | warn |
-| W305 | 红线缺 `spec` 声明（规则未参数化） | warn |
 | S001 | 跨仓检查未完整执行（只检出单仓），明示跳过而非静默通过 | info |
 | RL-001 | 巡查线互相调用 | error |
 | RL-002 | 对外入口不是网关/前端，或网关未对外 | error |

@@ -126,7 +126,7 @@ def load_terms(contracts_root: Path) -> list[dict[str, Any]]:
     return list(data.get("terms", []))
 
 
-def load_decision_schema(contracts_root: Path) -> list[str]:
-    """读契约层的决策枚举（真源之一）。"""
+def load_decision_schema(contracts_root: Path, field: str = "enum") -> list[str]:
+    """读契约层的决策枚举（真源之一）。字段名可参数化（缺省 enum）。"""
     data = read_yaml(contracts_root / "contracts" / "schemas" / "decision.yaml") or {}
-    return list(data.get("enum", []))
+    return list(data.get(field, []))

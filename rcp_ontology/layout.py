@@ -1,10 +1,14 @@
 """仓布局与部署清单级红线的机械检查。
 
-覆盖三条此前只有声明、没有实现的约束：
+覆盖三条此前只有声明、没有实现的约束（现已参数化，规则即数据）：
 
-- RL-004 建表/改表只允许在 ``rcp-ops/migrations``
-- RL-005 业务服务不得直接引入 JDBC 驱动（读写只经 dataway）
-- RL-007 部署清单不得写死内部服务的上游地址（应经服务发现）
+- RL-004 建表/改表只允许在 ``rcp-ops/migrations``（file-scan）
+- RL-005 业务服务不得直接引入 JDBC 驱动，读写只经 dataway（registry-scan）
+- RL-007 部署清单不得写死内部服务的上游地址（upstream-scan）
+
+本模块是"规则解释器"：执行参数（include / match / deny_values / allow_prefixes /
+scan_prefix / internal_hosts / message 模板）全部来自 redlines.yaml 的 spec 声明，
+这里不硬编码任何红线参数。新增或调整一条红线只需改 redlines.yaml。
 
 边界：只做文本与结构判定，不解析 Java 语义、不连集群、不判断"能否运行"。
 判定依据是仓库里的文件内容，因此结论可复算、可复现。
@@ -22,6 +26,7 @@ from typing import Any, Iterable, Iterator
 from .loader import Finding
 
 # 遍历时跳过的目录：构建产物、依赖、VCS 元数据、worktree。
+# 这是"基础设施"而非"规则参数"，对所有规则一致，故不放入 redlines.yaml。
 PRUNED_DIRS = {
     ".git",
     ".agents",
@@ -33,33 +38,9 @@ PRUNED_DIRS = {
     "__pycache__",
 }
 
-DDL_STATEMENT = re.compile(
-    r"\b(?:create|alter|drop|truncate)\s+"
-    r"(?:table|index|view|database|schema|unique\s+index)\b",
-    re.IGNORECASE,
-)
-
-# JDBC 驱动：按 groupId 判定，避免误伤 jdbc 客户端抽象或连接池。
-JDBC_DRIVER_GROUPS = {
-    "mysql",
-    "com.mysql",
-    "com.mysql.jdbc",
-    "org.postgresql",
-    "com.h2database",
-    "com.oracle.database.jdbc",
-    "org.mariadb.jdbc",
-}
-
-# 允许持有 JDBC 驱动与 SQL 的种类：数据网关与 DDL 执行者是唯一出口。
-DATA_LAYER_KINDS = {"data-gateway", "db-ops"}
-
-# 迁移真源的两种可接受写法：工作区根下的 rcp-ops/migrations，
-# 或把 rcp-ops 单独检出时其根下的 migrations（worktree / 独立 clone 布局）。
-# 业务仓内的 rcp-xxx/migrations 不匹配这两种，约束强度不变。
-DDL_ALLOWED_PREFIXES = ("rcp-ops/migrations/", "migrations/")
-
-UPSTREAM_URL = re.compile(r"https?://([a-z][a-z0-9-]*):(\d{2,5})\b")
-
+# pom.xml 依赖抽取的实现细节：这三个正则是"如何解析 pom"的固定机制，不是
+# "该禁哪些 groupId"的规则参数——后者在 spec 的 deny_values 里。
+# spec 里的 extract: dependency.groupId 即指此抽取。
 DEPENDENCY_BLOCK = re.compile(r"<dependency>(.*?)</dependency>", re.S)
 GROUP_ID = re.compile(r"<groupId>\s*([^<\s]+)\s*</groupId>")
 ARTIFACT_ID = re.compile(r"<artifactId>\s*([^<\s]+)\s*</artifactId>")
@@ -107,26 +88,47 @@ def _rel(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def check_ddl_location(
+def _suffixes(spec: dict[str, Any]) -> tuple[str, ...]:
+    """spec.include 形如 ["*.sql"]，转成 _walk 用的后缀元组 (".sql",)。"""
+    return tuple(
+        "." + p[2:]
+        for p in (spec.get("include") or [])
+        if isinstance(p, str) and p.startswith("*.")
+    )
+
+
+def _compile_match(spec: dict[str, Any]) -> re.Pattern[str]:
+    flags = re.IGNORECASE if spec.get("case_insensitive") else 0
+    return re.compile(spec["match"], flags)
+
+
+def run_file_scan(
+    spec: dict[str, Any],
     workspace: Path,
-    allowed_prefixes: Iterable[str] = DDL_ALLOWED_PREFIXES,
+    redline_id: str,
 ) -> list[Finding]:
-    """RL-004：迁移目录之外不得出现 DDL 语句。"""
+    """file-scan：按后缀遍历工作区，跳过允许前缀，正则命中即报。
+
+    执行参数全部来自 spec：include / allow_prefixes / match / case_insensitive /
+    message。message 支持 {rel} {matched} {allowed} 占位。
+    """
     findings: list[Finding] = []
-    allowed = tuple(allowed_prefixes)
-    for sql_file in _walk(workspace, (".sql",)):
-        rel = _rel(sql_file, workspace)
-        if rel.startswith(allowed):
+    pattern = _compile_match(spec)
+    allowed = tuple(spec.get("allow_prefixes") or ())
+    template = spec.get("message") or "{rel} 命中「{matched}」"
+    for path in _walk(workspace, _suffixes(spec)):
+        rel = _rel(path, workspace)
+        if allowed and rel.startswith(allowed):
             continue
-        text = sql_file.read_text(encoding="utf-8", errors="replace")
-        hit = DDL_STATEMENT.search(text)
+        text = path.read_text(encoding="utf-8", errors="replace")
+        hit = pattern.search(text)
         if hit:
+            matched = " ".join(hit.group(0).split())
             findings.append(
                 Finding(
                     "error",
-                    "RL-004",
-                    f"{rel} 含 DDL「{' '.join(hit.group(0).split())}」；"
-                    f"建表/改表只允许经 db-ops 执行 {allowed} 下的迁移",
+                    redline_id,
+                    template.format(rel=rel, matched=matched, allowed=allowed),
                 )
             )
     return findings
@@ -139,19 +141,35 @@ def _dependencies(pom_text: str) -> Iterator[tuple[str, str]]:
         yield (group.group(1) if group else "", artifact.group(1) if artifact else "")
 
 
-def check_jdbc_in_business(workspace: Path, registry: dict[str, Any]) -> list[Finding]:
-    """RL-005：业务服务与人共用库不得引入 JDBC 驱动。"""
+def run_registry_scan(
+    spec: dict[str, Any],
+    workspace: Path,
+    registry: dict[str, Any],
+    redline_id: str,
+) -> list[Finding]:
+    """registry-scan：遍历登记的服务/库，读其 pom.xml，抽取依赖 groupId，命中 deny 即报。
+
+    执行参数：include（仓内文件名）/ extract / deny_values / allow_kinds / message。
+    message 支持 {repo} {name} {group} {artifact} 占位。
+    """
     findings: list[Finding] = []
+    allowed_kinds = set(spec.get("allow_kinds") or [])
+    deny = set(spec.get("deny_values") or [])
+    filename = (spec.get("include") or ["pom.xml"])[0]
+    template = (
+        spec.get("message")
+        or "{repo}（{name}）命中禁用依赖 {group}:{artifact}"
+    )
+
     allowed_repos = {
         service.get("repo")
         for service in registry.get("services", [])
-        if service.get("kind") in DATA_LAYER_KINDS
+        if service.get("kind") in allowed_kinds
     }
-
     targets: list[tuple[str, str]] = [
         (service.get("repo"), service.get("name"))
         for service in registry.get("services", [])
-        if service.get("kind") not in DATA_LAYER_KINDS
+        if service.get("kind") not in allowed_kinds
     ]
     targets += [
         (library.get("repo"), library.get("name"))
@@ -161,19 +179,18 @@ def check_jdbc_in_business(workspace: Path, registry: dict[str, Any]) -> list[Fi
     for repo, name in targets:
         if not repo or repo in allowed_repos:
             continue
-        pom = workspace / repo / "pom.xml"
+        pom = workspace / repo / filename
         if not pom.is_file():
             # 仓缺失由构建暴露，不在本检查里重复报。
             continue
         text = pom.read_text(encoding="utf-8", errors="replace")
         for group, artifact in _dependencies(text):
-            if group in JDBC_DRIVER_GROUPS:
+            if group in deny:
                 findings.append(
                     Finding(
                         "error",
-                        "RL-005",
-                        f"{repo}（{name}）的 pom 引入 JDBC 驱动 {group}:{artifact}；"
-                        f"业务读写只能经 dataway 的 HTTP 契约",
+                        redline_id,
+                        template.format(repo=repo, name=name, group=group, artifact=artifact),
                     )
                 )
     return findings
@@ -213,21 +230,23 @@ def _brief(text: Any, limit: int = 48) -> str:
     return flat if len(flat) <= limit else flat[:limit] + "…"
 
 
-def check_hardcoded_upstream(
+def run_upstream_scan(
+    spec: dict[str, Any],
     workspace: Path,
     registry: dict[str, Any],
-    exceptions: Iterable[dict[str, Any]] = (),
+    exceptions: Iterable[dict[str, Any]],
+    redline_id: str,
     today: date | None = None,
-    scan_prefix: str = "rcp-ops/",
 ) -> list[Finding]:
-    """RL-007：部署清单不得写死内部服务地址，例外须登记且定期复审。
+    """upstream-scan：扫 scan_prefix 下的清单，匹配 host:port，内部地址写死即报。
 
-    例外命中按 (文件, 例外) 聚合为一条 warn，避免同一例外刷屏多行；
-    未登记与已过期的偏离逐条报 error，保留行号便于定位。
+    登记例外降级为 warn（按 (文件, 例外) 聚合为一条），review_by 过期恢复为 error。
+    执行参数：scan_prefix / include / match / internal_hosts / message 模板。
     """
     findings: list[Finding] = []
-    exceptions = list(exceptions)
+    exceptions = [e for e in exceptions if e.get("redline") == redline_id]
     today = today or date.today()
+    pattern = _compile_match(spec)
     internal = {
         service.get("name")
         for service in registry.get("services", [])
@@ -235,32 +254,49 @@ def check_hardcoded_upstream(
     }
     excepted: dict[tuple[str, int], dict[str, Any]] = {}
 
-    root = workspace / scan_prefix.rstrip("/")
-    for path in _walk(root, (".yml", ".yaml")):
+    t_unreg = (
+        spec.get("message")
+        or "{rel}:{lineno} 写死上游 {url}；应经服务发现解析，或在 redlines.yaml 登记例外"
+    )
+    t_expired = (
+        spec.get("message_expired")
+        or "{rel}:{lineno} 写死上游 {url}；登记的例外已于 {review_by} 过期，须复审"
+    )
+    t_excepted = (
+        spec.get("message_excepted")
+        or "{rel} {span}写死内部服务地址（例外：{reason}；owner={owner}，复审 {review_by}）"
+    )
+
+    root = workspace / str(spec.get("scan_prefix") or "").rstrip("/")
+    for path in _walk(root, _suffixes(spec)):
         rel = _rel(path, workspace)
         text = path.read_text(encoding="utf-8", errors="replace")
         for lineno, line in enumerate(text.splitlines(), 1):
-            for match in UPSTREAM_URL.finditer(line):
+            for match in pattern.finditer(line):
                 host = match.group(1)
                 if host not in internal:
                     continue
-                exception = _match_exception("RL-007", rel, line, exceptions)
+                url = match.group(0)
+                exception = _match_exception(redline_id, rel, line, exceptions)
                 if exception is None:
                     findings.append(
                         Finding(
                             "error",
-                            "RL-007",
-                            f"{rel}:{lineno} 写死上游 {match.group(0)}；"
-                            f"应经服务发现解析，或在 redlines.yaml 登记例外",
+                            redline_id,
+                            t_unreg.format(rel=rel, lineno=lineno, url=url),
                         )
                     )
                 elif _expired(exception, today):
                     findings.append(
                         Finding(
                             "error",
-                            "RL-007",
-                            f"{rel}:{lineno} 写死上游 {match.group(0)}；"
-                            f"登记的例外已于 {exception.get('review_by')} 过期，须复审",
+                            redline_id,
+                            t_expired.format(
+                                rel=rel,
+                                lineno=lineno,
+                                url=url,
+                                review_by=exception.get("review_by"),
+                            ),
                         )
                     )
                 else:
@@ -277,9 +313,44 @@ def check_hardcoded_upstream(
         findings.append(
             Finding(
                 "warn",
-                "RL-007",
-                f"{rel} {span}写死内部服务地址（例外：{_brief(exception.get('reason'))}；"
-                f"owner={exception.get('owner', '未指定')}，复审 {exception.get('review_by', '未定')}）",
+                redline_id,
+                t_excepted.format(
+                    rel=rel,
+                    span=span,
+                    reason=_brief(exception.get("reason")),
+                    owner=exception.get("owner", "未指定"),
+                    review_by=exception.get("review_by", "未定"),
+                ),
             )
         )
+    return findings
+
+
+def run_declared_scans(
+    redlines: dict[str, Any],
+    workspace: Path,
+    registry: dict[str, Any],
+) -> list[Finding]:
+    """按 redlines.yaml 的 spec 声明执行三类扫描红线。
+
+    每类 spec.type 对应一个解释器；新增一条已支持类型的红线只需在 redlines.yaml
+    加一条声明，无需改本文件。registry-assert 与 cross-source 的判定由 checks.py
+    的 TBox 驱动检查与跨源比对承担（不在这里）。
+    """
+    findings: list[Finding] = []
+    exceptions = redlines.get("exceptions", [])
+    for constraint in redlines.get("constraints", []):
+        spec = constraint.get("spec")
+        if not isinstance(spec, dict):
+            continue
+        redline_id = constraint.get("id") or "?"
+        spec_type = spec.get("type")
+        if spec_type == "file-scan":
+            findings += run_file_scan(spec, workspace, redline_id)
+        elif spec_type == "registry-scan":
+            findings += run_registry_scan(spec, workspace, registry, redline_id)
+        elif spec_type == "upstream-scan":
+            findings += run_upstream_scan(
+                spec, workspace, registry, exceptions, redline_id
+            )
     return findings
