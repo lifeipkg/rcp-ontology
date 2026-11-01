@@ -1,0 +1,72 @@
+schema: rcp.concepts/v1
+# TBox：能力（capability）立名。服务登记里出现的 capability 必须在此声明过。
+concepts:
+  - name: patrol.dispatch
+    zh: 巡查派发
+    definition: 受理统一巡查事件并按 domain 路由到对应巡查线。
+    owner: api-gateway
+
+  - name: patrol.domains
+    zh: 巡查线自描述
+    definition: 返回平台当前支持的巡查线清单。
+    owner: api-gateway
+
+  - name: patrol.content.dedup
+    zh: 内容判重
+    definition: 岗位文案近重复检测（SimHash + 3-gram + 分段索引）。
+    owner: content-patrol
+
+  - name: patrol.message.ac
+    zh: 消息命中
+    definition: 会话文本敏感词与变体命中（AC 自动机 + 角色分级）。
+    owner: message-patrol
+
+  - name: patrol.account.rule
+    zh: 账号规则
+    definition: 接码、养号等账号侧风险规则判定。
+    owner: account-patrol
+
+  - name: patrol.fund.rule
+    zh: 资金规则
+    definition: 补贴薅取等资金侧风险规则判定。
+    owner: fund-patrol
+
+  - name: data.query
+    zh: 声明式查询
+    definition: 只读查询，限 SELECT 且限白名单表。
+    owner: dataway
+
+  - name: data.execute
+    zh: 模板写入
+    definition: 按服务端登记模板执行写入，拒绝裸 DML。
+    owner: dataway
+
+  - name: schema.migrate
+    zh: 迁移执行
+    definition: 按版本顺序执行 DDL 迁移。
+    owner: db-ops
+
+  - name: schema.version
+    zh: 版本台账
+    definition: 提供已应用/待应用版本查询。
+    owner: db-ops
+
+  - name: ops.console
+    zh: 运营控制台
+    definition: 风控运营前端，经网关查看派发结果与巡查线状态。
+    owner: web
+
+  - name: decision.model
+    zh: 决策模型
+    definition: 统一决策枚举与风险分映射（库能力，非 HTTP 服务）。
+    owner: rcp-core
+
+  - name: patrol.pipeline
+    zh: 巡查流水线
+    definition: 同构巡查流水线抽象，各巡查线按同一骨架实现。
+    owner: rcp-core
+
+  - name: rule.engine
+    zh: 规则引擎
+    definition: 条件-判定-分值的规则执行内核。
+    owner: rcp-core

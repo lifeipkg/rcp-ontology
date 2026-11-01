@@ -1,0 +1,33 @@
+schema: rcp.concepts/v1
+# TBox：服务种类（kind）概念定义。ABox 实例在 rcp-contracts/registry/services.yaml，
+# 本文件只管"有哪些种类、各自的语义与约束"，不含具体服务。
+concepts:
+  - name: gateway
+    zh: 网关
+    definition: 平台对外唯一 HTTP 入口，负责幂等、路由、分级处置与降级。
+    must_be_external: true
+    allowed_depends_on_kinds: [patrol-line, data-gateway, db-ops]
+
+  - name: patrol-line
+    zh: 巡查线
+    definition: 按业务域切分的风控判定单元，必须可独立部署、独立降级。
+    must_be_external: false
+    allowed_depends_on_kinds: []
+
+  - name: data-gateway
+    zh: 数据网关
+    definition: 业务服务访问数据库的唯一出口，只接受声明式查询与模板化写入。
+    must_be_external: false
+    allowed_depends_on_kinds: []
+
+  - name: db-ops
+    zh: 数据库操作服务
+    definition: 版本化 DDL 的唯一执行者，负责迁移执行、台账与回滚。
+    must_be_external: false
+    allowed_depends_on_kinds: []
+
+  - name: frontend
+    zh: 前端
+    definition: 运营控制台，只经 api-gateway 访问后端，不得直连任何裸服务。
+    must_be_external: true
+    allowed_depends_on_kinds: [gateway]
