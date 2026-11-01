@@ -15,6 +15,7 @@ from rcp_ontology.checks import (
     check_capability_ownership,
     check_contracts_exist,
     check_decision_alignment,
+    check_declarations,
     check_dependency_graph,
     check_redlines,
     check_registry_shape,
@@ -23,6 +24,7 @@ from rcp_ontology.checks import (
     check_tbox_abox,
     check_tbox_integrity,
     check_term_coverage,
+    diff_findings,
     workspace_is_complete,
 )
 from rcp_ontology.layout import (
@@ -32,7 +34,7 @@ from rcp_ontology.layout import (
     run_registry_scan,
     run_upstream_scan,
 )
-from rcp_ontology.loader import LoadError, SCOPE_WORKSPACE, read_yaml
+from rcp_ontology.loader import Finding, LoadError, SCOPE_DECLARATION, SCOPE_WORKSPACE, read_yaml
 
 CONCEPTS = {
     "kinds": [
@@ -593,3 +595,32 @@ def test_real_contracts_repo_is_closed():
 
     errors = [f for f in check_all(contracts, concepts, workspace) if f.level == "error"]
     assert errors == []
+
+
+def test_diff_findings_reports_added_and_removed():
+    """架构熵差集：新增/消失按 (level, code, message) 计，重复结论按多重集计。"""
+    before = [
+        Finding("error", "E107", "工作区存在 rcp-ghost，未登记"),
+        Finding("warn", "W301", "能力 patrol.x 无服务使用"),
+    ]
+    after = [
+        Finding("error", "E107", "工作区存在 rcp-ghost，未登记"),
+        Finding("warn", "E109", "dataway(data-gateway) 入度为 0"),
+    ]
+    drift = diff_findings(before, after)
+    assert drift["added"] == [("warn", "E109", "dataway(data-gateway) 入度为 0")]
+    assert drift["removed"] == [("warn", "W301", "能力 patrol.x 无服务使用")]
+
+
+def test_check_declarations_is_scope_limited():
+    """check_declarations 只产出声明层结论，不碰工作区文件布局。"""
+    import os
+
+    contracts = Path(os.environ.get("RCP_CONTRACTS")
+                     or Path(__file__).resolve().parent.parent.parent / "rcp-contracts")
+    if not contracts.is_dir():
+        pytest.skip("工作区无 rcp-contracts，跳过集成检查")
+    findings = check_declarations(contracts)
+    assert findings
+    assert all(f.scope == SCOPE_DECLARATION for f in findings)
+    assert all(f.level in {"error", "warn"} for f in findings)

@@ -1,7 +1,7 @@
 """本体检查器 CLI。
 
 用法（文件路径直接执行或 -m 均可）：
-    python rcp_ontology/cli.py check --contracts ../rcp-contracts [--workspace .] [--json]
+    python rcp_ontology/cli.py check --contracts ../rcp-contracts [--workspace .] [--json] [--baseline origin/main]
     python rcp_ontology/cli.py render --contracts ../rcp-contracts --out SERVICES.md
     python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway
     python rcp_ontology/cli.py owners --contracts ../rcp-contracts [--out .github/CODEOWNERS]
@@ -11,15 +11,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rcp_ontology import graph as G  # noqa: E402
-from rcp_ontology.checks import check_all  # noqa: E402
+from rcp_ontology.checks import check_all, check_declarations, diff_findings  # noqa: E402
 from rcp_ontology.loader import (  # noqa: E402
+    SCOPE_DECLARATION,
     SCOPE_WORKSPACE,
     LoadError,
     load_concepts,
@@ -34,13 +39,61 @@ def _fmt(finding) -> str:
     return f"[{finding.level.upper():5}] {tag}{finding.code}: {finding.message}"
 
 
+def _extract_contracts_at(contracts: Path, ref: str) -> Path:
+    """把契约仓在 ref 处的快照解到临时目录，返回该目录（用于 --baseline）。"""
+    tmpdir = Path(tempfile.mkdtemp(prefix="rcp-ontology-baseline-"))
+    archive = tmpdir / "snapshot.tar"
+    result = subprocess.run(
+        ["git", "-C", str(contracts), "archive", "--output", str(archive), ref],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise RuntimeError(f"基线 {ref} 不可读: {result.stderr.strip()}")
+    with tarfile.open(archive) as tf:
+        # filter="data"：只解普通文件与目录，忽略/清洗元数据（Python 3.12+ 防解包攻击）。
+        try:
+            tf.extractall(tmpdir, filter="data")
+        except TypeError:  # Python < 3.12 无 filter 参数
+            tf.extractall(tmpdir)
+    archive.unlink()
+    return tmpdir
+
+
+def _decl_entropy(findings: list) -> list:
+    """架构熵只比声明层、可判定的 error/warn；跨仓结论与跳过说明不参与漂移。"""
+    return [
+        f
+        for f in findings
+        if f.scope == SCOPE_DECLARATION and f.level in {"error", "warn"}
+    ]
+
+
+def _fmt_drift_line(tag: str, entry: tuple[str, str, str]) -> str:
+    level, code, message = entry
+    return f"  [{tag}][{level.upper():5}] {code}: {message}"
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     contracts = Path(args.contracts).resolve()
     concepts_dir = Path(args.concepts).resolve() if args.concepts else None
     workspace = Path(args.workspace).resolve() if args.workspace else None
+
+    # 先解析基线快照（若给），失败即输入错误，不产出半截结论。
+    baseline_dir: Path | None = None
+    if args.baseline:
+        try:
+            baseline_dir = _extract_contracts_at(contracts, args.baseline)
+        except RuntimeError as exc:
+            print(f"[rcp-ontology] {exc}", file=sys.stderr)
+            return 2
+
     try:
         findings = check_all(contracts, concepts_dir, workspace)
     except LoadError as exc:
+        if baseline_dir:
+            shutil.rmtree(baseline_dir, ignore_errors=True)
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
@@ -50,15 +103,44 @@ def cmd_check(args: argparse.Namespace) -> int:
     infos = [f for f in findings if f.level == "info"]
     cross_repo_skipped = [f for f in infos if f.code == "S001"]
 
+    # 架构熵漂移（--baseline）：基线声明层结论 vs 当前声明层结论的差集。
+    drift = None
+    if baseline_dir is not None:
+        try:
+            baseline_findings = check_declarations(baseline_dir, concepts_dir)
+            drift = diff_findings(
+                _decl_entropy(baseline_findings), _decl_entropy(findings)
+            )
+        except LoadError as exc:
+            print(
+                f"[rcp-ontology] 基线声明不可用，跳过漂移对比: {exc}", file=sys.stderr
+            )
+        finally:
+            shutil.rmtree(baseline_dir, ignore_errors=True)
+
     if args.json:
-        print(json.dumps({
+        payload = {
             "contracts": str(contracts),
             "workspace": str(workspace or contracts.parent),
             "errors": [f.as_dict() for f in errors],
             "warnings": [f.as_dict() for f in warns],
             "skipped": [f.as_dict() for f in infos],
             "closed": not errors,
-        }, ensure_ascii=False, indent=2))
+        }
+        if drift is not None:
+            payload["drift"] = {
+                "baseline": args.baseline,
+                "scope": SCOPE_DECLARATION,
+                "added_count": len(drift["added"]),
+                "removed_count": len(drift["removed"]),
+                "added": [
+                    {"level": l, "code": c, "message": m} for l, c, m in drift["added"]
+                ],
+                "removed": [
+                    {"level": l, "code": c, "message": m} for l, c, m in drift["removed"]
+                ],
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         for finding in findings:
             print(_fmt(finding))
@@ -66,6 +148,20 @@ def cmd_check(args: argparse.Namespace) -> int:
             f"\n结论：{len(errors)} 个错误，{len(warns)} 个提示，"
             f"{len(infos)} 条跳过说明 —— {'闭合' if not errors else '未闭合'}"
         )
+        if drift is not None:
+            added, removed = drift["added"], drift["removed"]
+            net = len(added) - len(removed)
+            print(
+                f"\n架构熵基线对比（baseline: {args.baseline}，声明层 error/warn）："
+            )
+            print(
+                f"  新增 +{len(added)} 条 / 消失 -{len(removed)} 条，"
+                f"净漂移 {net:+d} 条"
+            )
+            for entry in added:
+                print(_fmt_drift_line("新增", entry))
+            for entry in removed:
+                print(_fmt_drift_line("消失", entry))
 
     if errors:
         return 1
@@ -211,6 +307,10 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--workspace",
         help="多仓工作区根，用于仓布局级红线（RL-004/005/007）与 E107；缺省取契约仓父目录",
+    )
+    check.add_argument(
+        "--baseline",
+        help="git 基线（如 HEAD~1 / origin/main），给出则追加架构熵漂移对比（声明层 error/warn 差集）",
     )
     check.add_argument(
         "--require-workspace",

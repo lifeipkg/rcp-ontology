@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -573,24 +574,20 @@ def _spec_by_id(redlines: dict[str, Any], redline_id: str) -> dict[str, Any] | N
     return None
 
 
-def check_all(
+def check_declarations(
     contracts_root: Path,
     concepts_dir: Path | None = None,
-    workspace_root: Path | None = None,
 ) -> list[Finding]:
-    """跑全部检查。
+    """只跑声明层检查：登记/契约/红线/图/归属/命名/词汇，不碰工作区文件布局。
 
-    contracts_root: 契约仓根；concepts_dir: TBox 目录（缺省本仓 concepts/）；
-    workspace_root: 多仓工作区根（缺省取契约仓的父目录）。
+    contracts_root: 契约仓根；concepts_dir: TBox 目录（缺省本仓 concepts/）。
+    这些检查只依赖声明文件，任何单仓环境都能复算，是架构熵基线对比的范围。
     """
     concepts_dir = concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
-    workspace_root = workspace_root or contracts_root.parent
     registry = load_registry(contracts_root)
     concepts = load_concepts(concepts_dir)
     redlines = load_redlines(contracts_root)
     terms = load_terms(contracts_root)
-
-    complete = workspace_is_complete(workspace_root, registry)
 
     findings: list[Finding] = []
     findings += check_rule_specs(redlines)
@@ -604,11 +601,53 @@ def check_all(
     findings += check_capability_names(concepts)
     findings += check_term_coverage(concepts, terms)
     findings += check_dependency_graph(registry, concepts)
+    return findings
+
+
+def finding_key(finding: Finding) -> tuple[str, str, str]:
+    """Finding 的稳定标识，用于跨版本结论差集。"""
+    return (finding.level, finding.code, finding.message)
+
+
+def diff_findings(
+    before: list[Finding],
+    after: list[Finding],
+) -> dict[str, list[tuple[str, str, str]]]:
+    """两个 Finding 列表的结构化差集（架构熵）。
+
+    返回 {"added": [...], "removed": [...]}，元素为 (level, code, message) 三元组，
+    按字典序排序；重复结论按多重集计数（同一条结论新增两处 = 两次漂移）。
+    """
+    before_counts = Counter(finding_key(f) for f in before)
+    after_counts = Counter(finding_key(f) for f in after)
+    return {
+        "added": sorted((after_counts - before_counts).elements()),
+        "removed": sorted((before_counts - after_counts).elements()),
+    }
+
+
+def check_all(
+    contracts_root: Path,
+    concepts_dir: Path | None = None,
+    workspace_root: Path | None = None,
+) -> list[Finding]:
+    """跑全部检查（声明层 + 工作区文件布局层）。
+
+    contracts_root: 契约仓根；concepts_dir: TBox 目录（缺省本仓 concepts/）；
+    workspace_root: 多仓工作区根（缺省取契约仓的父目录）。
+    """
+    concepts_dir = concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
+    workspace_root = workspace_root or contracts_root.parent
+    registry = load_registry(contracts_root)
+
+    findings = check_declarations(contracts_root, concepts_dir)
+
+    complete = workspace_is_complete(workspace_root, registry)
 
     workspace_findings: list[Finding] = []
     workspace_findings += [
         replace(f, scope=SCOPE_WORKSPACE)
-        for f in run_declared_scans(redlines, workspace_root, registry)
+        for f in run_declared_scans(load_redlines(contracts_root), workspace_root, registry)
     ]
     workspace_findings += check_repo_registration(workspace_root, registry, complete)
     findings += workspace_findings

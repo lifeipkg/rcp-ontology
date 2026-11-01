@@ -42,6 +42,9 @@ python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace ..
 # 要求跨仓检查必须完整执行：只检出单仓时退出码 2，防"假绿灯"
 python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace .. --require-workspace
 
+# 架构熵基线对比：契约仓在 <ref> 处与当前的声明层结论差集（新增/消失的 error+warn）
+python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace .. --baseline origin/main
+
 # 改一个服务之前，先看它会波及谁
 python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway
 
