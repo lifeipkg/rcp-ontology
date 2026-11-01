@@ -683,15 +683,31 @@ def test_diff_findings_reports_added_and_removed():
     assert drift["removed"] == [("warn", "W301", "能力 patrol.x 无服务使用")]
 
 
-def test_check_declarations_is_scope_limited():
-    """check_declarations 只产出声明层结论，不碰工作区文件布局。"""
-    import os
+def test_check_declarations_is_scope_limited(tmp_path: Path):
+    """check_declarations 只产出声明层结论（scope=declaration），不碰工作区文件布局。
 
-    contracts = Path(os.environ.get("RCP_CONTRACTS")
-                     or Path(__file__).resolve().parent.parent.parent / "rcp-contracts")
-    if not contracts.is_dir():
-        pytest.skip("工作区无 rcp-contracts，跳过集成检查")
-    findings = check_declarations(contracts)
+    用 tmp_path 构造一个带声明层违规（未立名能力）的最小契约仓，确保 findings 非空，
+    从而真正验证 scope 隔离——不依赖真实仓库当前是否恰好有噪音（声明层闭合时为空）。
+    """
+    (tmp_path / "registry").mkdir()
+    (tmp_path / "registry" / "services.yaml").write_text(
+        yaml.safe_dump({
+            "services": [{
+                "name": "ghost", "repo": "rcp-ghost", "kind": "patrol-line",
+                "port": 8099, "external": False, "owner": "platform",
+                "capabilities": ["patrol.ghost"],  # 未立名能力 → E202
+                "depends_on": [], "contracts": [],
+            }],
+            "libraries": [],
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "ontology" / "constraints").mkdir(parents=True)
+    (tmp_path / "ontology" / "constraints" / "redlines.yaml").write_text(
+        "constraints: []\nexceptions: []\n", encoding="utf-8"
+    )
+
+    findings = check_declarations(tmp_path)
     assert findings
     assert all(f.scope == SCOPE_DECLARATION for f in findings)
     assert all(f.level in {"error", "warn"} for f in findings)
