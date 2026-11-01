@@ -55,6 +55,17 @@ IMPLEMENTED_REDLINES = frozenset(
     {"RL-001", "RL-002", "RL-003", "RL-004", "RL-005", "RL-006", "RL-007"}
 )
 
+# 规则规格（policy-as-code 第一步）已知的执行器类型与必填字段。
+# 每条红线的 spec.type 必须落在其中，缺必填字段即 E302。
+# 注意：本步只校验 spec 的"合法性"（能否被未来的解释器解析），
+# 执行仍由 IMPLEMENTED_REDLINES 对应的硬编码承担；规格与实现的等价
+# 由引擎化（下一步）用 diff 验收保证，不由本校验宣称。
+RULE_SPEC_TYPES: dict[str, dict[str, tuple[str, ...]]] = {
+    "registry-assert": {"required": ("via",)},
+    "cross-source": {"required": ("sources", "assert")},
+    "file-scan": {"required": ("include",)},
+}
+
 
 def _kind_map(concepts: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
     return {k["name"]: k for k in concepts["kinds"]}
@@ -286,6 +297,71 @@ def check_redline_coverage(redlines: dict[str, Any]) -> list[Finding]:
         findings.append(
             Finding("warn", "W302", f"{redline_id} 有实现，但未在 redlines.yaml 登记")
         )
+    return findings
+
+
+def check_rule_specs(redlines: dict[str, Any]) -> list[Finding]:
+    """E302 规则规格不合法 / W305 红线未参数化。
+
+    spec 是 redlines.yaml 里机器可读的检查规格（policy-as-code 第一步）。
+    只做机械判定：type 是否已知、必填字段是否齐全、正则能否编译、
+    file-scan 是否具备定位手段（match 或 extract）。不校验"规格与实现
+    是否等价"——那是引擎化（下一步）由 diff 验收负责的。
+    """
+    findings: list[Finding] = []
+    for constraint in redlines.get("constraints", []):
+        redline_id = constraint.get("id", "?")
+        spec = constraint.get("spec")
+        if not isinstance(spec, dict):
+            findings.append(
+                Finding("warn", "W305", f"{redline_id} 缺 spec 声明（规则未参数化）")
+            )
+            continue
+
+        spec_type = spec.get("type")
+        rule = RULE_SPEC_TYPES.get(spec_type)
+        if rule is None:
+            findings.append(
+                Finding(
+                    "error",
+                    "E302",
+                    f"{redline_id} 的 spec.type={spec_type!r} 不是已知类型；"
+                    f"已知: {sorted(RULE_SPEC_TYPES)}",
+                )
+            )
+            continue
+
+        missing = [f for f in rule["required"] if f not in spec]
+        if missing:
+            findings.append(
+                Finding(
+                    "error",
+                    "E302",
+                    f"{redline_id}（{spec_type}）缺必填字段: {', '.join(missing)}",
+                )
+            )
+
+        if spec_type == "file-scan" and "match" not in spec and "extract" not in spec:
+            findings.append(
+                Finding(
+                    "error",
+                    "E302",
+                    f"{redline_id}（file-scan）既无 match 也无 extract，无法定位命中",
+                )
+            )
+
+        pattern = spec.get("match")
+        if isinstance(pattern, str):
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                findings.append(
+                    Finding(
+                        "error",
+                        "E302",
+                        f"{redline_id} 的 match 正则无法编译: {exc}",
+                    )
+                )
     return findings
 
 
@@ -536,6 +612,7 @@ def check_all(
 
     findings: list[Finding] = []
     findings += check_redline_coverage(redlines)
+    findings += check_rule_specs(redlines)
     findings += check_registry_shape(registry, concepts)
     findings += check_redlines(registry, concepts)
     findings += check_decision_alignment(contracts_root, concepts)

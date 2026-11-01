@@ -20,6 +20,7 @@ from rcp_ontology.checks import (
     check_redlines,
     check_registry_shape,
     check_repo_registration,
+    check_rule_specs,
     check_tbox_abox,
     check_tbox_integrity,
     check_term_coverage,
@@ -253,6 +254,50 @@ def test_declared_redline_without_implementation_is_paper_redline():
 def test_implemented_redline_not_declared_is_warning():
     findings = check_redline_coverage({"constraints": [{"id": "RL-001"}], "exceptions": []})
     assert "W302" in codes(findings, level="warn")
+
+
+def test_spec_unknown_type_is_error():
+    redlines = {"constraints": [{"id": "RL-001", "spec": {"type": "nope"}}], "exceptions": []}
+    assert "E302" in codes(check_rule_specs(redlines))
+
+
+def test_spec_missing_required_field_is_error():
+    redlines = {"constraints": [{"id": "RL-003", "spec": {"type": "cross-source"}}], "exceptions": []}
+    assert "E302" in codes(check_rule_specs(redlines))
+
+
+def test_spec_bad_regex_is_error():
+    redlines = {
+        "constraints": [{"id": "RL-004", "spec": {"type": "file-scan", "include": ["*.sql"], "match": "("}}],
+        "exceptions": [],
+    }
+    assert "E302" in codes(check_rule_specs(redlines))
+
+
+def test_spec_file_scan_needs_match_or_extract():
+    redlines = {
+        "constraints": [{"id": "RL-004", "spec": {"type": "file-scan", "include": ["*.sql"]}}],
+        "exceptions": [],
+    }
+    assert "E302" in codes(check_rule_specs(redlines))
+
+
+def test_missing_spec_is_warning():
+    redlines = {"constraints": [{"id": "RL-001"}], "exceptions": []}
+    assert "W305" in codes(check_rule_specs(redlines), level="warn")
+
+
+def test_valid_spec_has_no_findings():
+    redlines = {
+        "constraints": [
+            {"id": "RL-001", "spec": {"type": "registry-assert", "via": "kinds.allowed_depends_on_kinds"}},
+            {"id": "RL-003", "spec": {"type": "cross-source", "sources": [], "assert": "identical"}},
+            {"id": "RL-004", "spec": {"type": "file-scan", "include": ["*.sql"], "match": "create"}},
+            {"id": "RL-005", "spec": {"type": "file-scan", "include": ["pom.xml"], "extract": "dependency.groupId"}},
+        ],
+        "exceptions": [],
+    }
+    assert check_rule_specs(redlines) == []
 
 
 def test_ddl_outside_migrations_is_error(tmp_path: Path):
