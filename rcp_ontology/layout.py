@@ -65,12 +65,36 @@ GROUP_ID = re.compile(r"<groupId>\s*([^<\s]+)\s*</groupId>")
 ARTIFACT_ID = re.compile(r"<artifactId>\s*([^<\s]+)\s*</artifactId>")
 
 
+def is_worktree(path: Path) -> bool:
+    """判断目录是不是某个仓的 worktree（而非独立检出）。
+
+    机械判据：``.git`` 是文件且首行以 ``gitdir:`` 开头——这是 git worktree 与
+    submodule 的布局，主仓的 ``.git`` 是目录。
+
+    为什么必须排掉：worktree 目录名形如 ``rcp-ontology-team``，在只看目录名的
+    检查里会被当成"未登记的仓"，而且其中的文件会被重复扫一遍，导致同一条红线
+    报两次。worktree 的真实归属仓已在主检出里登记，不该单独计一次。
+    """
+    dot_git = path / ".git"
+    if not dot_git.is_file():
+        return False
+    try:
+        head = dot_git.read_text(encoding="utf-8", errors="ignore").lstrip()
+    except OSError:
+        return False
+    return head.startswith("gitdir:")
+
+
 def _walk(root: Path, suffixes: tuple[str, ...]) -> Iterator[Path]:
-    """按后缀遍历，跳过 PRUNED_DIRS。不跟随符号链接。"""
+    """按后缀遍历，跳过 PRUNED_DIRS 与 worktree 目录。不跟随符号链接。"""
     if not root.is_dir():
         return
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if d not in PRUNED_DIRS)
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d not in PRUNED_DIRS and not is_worktree(Path(dirpath) / d)
+        )
         for filename in sorted(filenames):
             if os.path.splitext(filename)[1] in suffixes:
                 yield Path(dirpath) / filename
