@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,10 @@ RULE_SPEC_TYPES: dict[str, dict[str, tuple[str, ...]]] = {
     "registry-scan": {"required": ("include", "extract", "deny_values", "allow_kinds")},
     "upstream-scan": {"required": ("include", "scan_prefix", "match", "internal_hosts")},
 }
+
+# 服务 expected 预期状态声明的合法字段。expected 用于区分"有意无下游"与
+# "漏登记依赖方"（E109/E110 是启发式，分不清二者），声明真值标志必须配审计三要素。
+EXPECTED_KEYS = ("no_dependents", "unreachable", "reason", "owner", "review_by")
 
 
 def _kind_map(concepts: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
@@ -460,6 +465,70 @@ def check_term_coverage(
     return findings
 
 
+def _expected_state(service: dict[str, Any]) -> dict[str, Any]:
+    """取服务登记的 expected 预期状态声明（缺省空映射）。"""
+    exp = service.get("expected")
+    return exp if isinstance(exp, dict) else {}
+
+
+def _expected_expired(expected: dict[str, Any], today: date) -> bool:
+    """review_by 过期则声明失效（恢复告警）；无 review_by 或非法日期视为未过期。"""
+    raw = expected.get("review_by")
+    if not raw:
+        return False
+    try:
+        return date.fromisoformat(str(raw)) < today
+    except ValueError:
+        return False
+
+
+def check_expected_state(registry: dict[str, Any]) -> list[Finding]:
+    """E115 预期状态声明（expected）形状不合法。
+
+    expected 是服务对"当前图位置"的声明，用于区分有意无下游与漏登记依赖方。
+    声明了任一真值标志（no_dependents/unreachable）就必须给出 reason/owner/review_by，
+    否则等于把噪音藏起来而不留审计。只做机械判定，不判"声明是否合理"。
+    """
+    findings: list[Finding] = []
+    for service in registry.get("services", []):
+        name = service.get("name", "<未命名>")
+        if "expected" not in service:
+            continue
+        expected = service.get("expected")
+        if not isinstance(expected, dict):
+            findings.append(Finding("error", "E115", f"{name} 的 expected 必须是映射"))
+            continue
+        unknown = [k for k in expected if k not in EXPECTED_KEYS]
+        if unknown:
+            findings.append(
+                Finding("error", "E115", f"{name} 的 expected 含未知字段: {', '.join(unknown)}")
+            )
+        for flag in ("no_dependents", "unreachable"):
+            if flag in expected and not isinstance(expected[flag], bool):
+                findings.append(
+                    Finding("error", "E115", f"{name} 的 expected.{flag} 必须是布尔值")
+                )
+        declares = bool(expected.get("no_dependents")) or bool(expected.get("unreachable"))
+        if declares:
+            for field in ("reason", "owner", "review_by"):
+                if not expected.get(field):
+                    findings.append(
+                        Finding("error", "E115", f"{name} 声明了预期状态，缺 {field}")
+                    )
+            if expected.get("review_by"):
+                try:
+                    date.fromisoformat(str(expected["review_by"]))
+                except ValueError:
+                    findings.append(
+                        Finding(
+                            "error",
+                            "E115",
+                            f"{name} 的 expected.review_by 不是合法日期: {expected['review_by']!r}",
+                        )
+                    )
+    return findings
+
+
 def check_dependency_graph(
     registry: dict[str, Any],
     concepts: dict[str, list[dict[str, Any]]],
@@ -476,9 +545,40 @@ def check_dependency_graph(
 
     degrees = G.in_degrees(graph)
     services = {s.get("name"): s for s in registry.get("services", []) if s.get("name")}
-    for name, degree in sorted(degrees.items()):
-        kind = services[name].get("kind")
-        if degree == 0 and not bool(kinds.get(kind, {}).get("is_entry")):
+    entries = [n for n, s in services.items() if bool(kinds.get(s.get("kind"), {}).get("is_entry"))]
+    unreachable = G.unreachable_from(graph, entries)
+    today = date.today()
+
+    for name, service in sorted(services.items()):
+        expected = _expected_state(service)
+        degree = degrees.get(name, 0)
+        kind = service.get("kind")
+        is_entry = bool(kinds.get(kind, {}).get("is_entry"))
+
+        # 声明与事实不符即过时（无论是否过期，过时声明都该移除）：W306。
+        if expected.get("no_dependents") and degree > 0:
+            findings.append(
+                Finding(
+                    "warn",
+                    "W306",
+                    f"{name} 声明 expected.no_dependents（预期无依赖），"
+                    f"但已有 {degree} 个依赖方，请移除过时声明",
+                )
+            )
+        if expected.get("unreachable") and name not in unreachable:
+            findings.append(
+                Finding(
+                    "warn",
+                    "W306",
+                    f"{name} 声明 expected.unreachable（预期不可达），"
+                    f"但已可从入口到达，请移除过时声明",
+                )
+            )
+
+        # E109：非入口且入度为 0。命中"预期无下游"声明且未过期则静默，否则告警。
+        if degree == 0 and not is_entry and not (
+            expected.get("no_dependents") and not _expected_expired(expected, today)
+        ):
             findings.append(
                 Finding(
                     "warn",
@@ -488,15 +588,17 @@ def check_dependency_graph(
                 )
             )
 
-    entries = [n for n, s in services.items() if bool(kinds.get(s.get("kind"), {}).get("is_entry"))]
-    for name in sorted(G.unreachable_from(graph, entries)):
-        findings.append(
-            Finding(
-                "warn",
-                "E110",
-                f"{name} 从任何对外入口均不可达（入口: {', '.join(sorted(entries)) or '无'}）",
+        # E110：从任何入口都不可达。命中"预期不可达"声明且未过期则静默，否则告警。
+        if name in unreachable and not (
+            expected.get("unreachable") and not _expected_expired(expected, today)
+        ):
+            findings.append(
+                Finding(
+                    "warn",
+                    "E110",
+                    f"{name} 从任何对外入口均不可达（入口: {', '.join(sorted(entries)) or '无'}）",
+                )
             )
-        )
     return findings
 
 
@@ -592,6 +694,7 @@ def check_declarations(
     findings: list[Finding] = []
     findings += check_rule_specs(redlines)
     findings += check_registry_shape(registry, concepts)
+    findings += check_expected_state(registry)
     findings += check_redlines(registry, concepts)
     findings += check_decision_alignment(contracts_root, concepts, _spec_by_id(redlines, "RL-003"))
     findings += check_tbox_abox(registry, concepts)
