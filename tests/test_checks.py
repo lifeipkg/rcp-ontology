@@ -13,9 +13,15 @@ import yaml
 from rcp_ontology.checks import (
     check_contracts_exist,
     check_decision_alignment,
+    check_redline_coverage,
     check_redlines,
     check_registry_shape,
     check_tbox_abox,
+)
+from rcp_ontology.layout import (
+    check_ddl_location,
+    check_hardcoded_upstream,
+    check_jdbc_in_business,
 )
 
 CONCEPTS = {
@@ -102,7 +108,9 @@ def test_frontend_may_depend_on_gateway_only():
         "depends_on": ["content-patrol"], "contracts": [],
     }
     findings = check_redlines({"services": [gateway(), service(), web]}, CONCEPTS)
-    assert "RL-001" in codes(findings)
+    # 非巡查线互调，走内置编号；RL-001 只留给 patrol-line ↔ patrol-line。
+    assert "E106" in codes(findings)
+    assert "RL-001" not in codes(findings)
 
 
 def test_dependency_on_unregistered_service_is_error():
@@ -161,11 +169,141 @@ def test_decision_enum_aligned(tmp_path: Path):
     assert check_decision_alignment(tmp_path, CONCEPTS) == []
 
 
+DATAWAY = {
+    "name": "dataway", "repo": "rcp-dataway", "kind": "data-gateway", "port": 8090,
+    "external": False, "owner": "platform", "capabilities": [],
+    "depends_on": [], "contracts": ["contracts/openapi/dataway.yaml"],
+}
+
+
+def _pom_with(group: str, artifact: str) -> str:
+    return (
+        "<project><dependencies><dependency>"
+        f"<groupId>{group}</groupId><artifactId>{artifact}</artifactId>"
+        "</dependency></dependencies></project>"
+    )
+
+
+def test_declared_redline_without_implementation_is_paper_redline():
+    redlines = {"constraints": [{"id": "RL-001"}, {"id": "RL-999"}], "exceptions": []}
+    findings = check_redline_coverage(redlines)
+    assert "E301" in codes(findings)
+
+
+def test_implemented_redline_not_declared_is_warning():
+    findings = check_redline_coverage({"constraints": [{"id": "RL-001"}], "exceptions": []})
+    assert "W302" in codes(findings, level="warn")
+
+
+def test_ddl_outside_migrations_is_error(tmp_path: Path):
+    repo = tmp_path / "rcp-content-patrol"
+    repo.mkdir()
+    (repo / "schema.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
+    assert "RL-004" in codes(check_ddl_location(tmp_path))
+
+
+def test_ddl_inside_migrations_is_allowed(tmp_path: Path):
+    migrations = tmp_path / "rcp-ops" / "migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "V1.0.0__init.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
+    assert check_ddl_location(tmp_path) == []
+
+
+def test_ddl_in_detached_migrations_repo_is_allowed(tmp_path: Path):
+    """rcp-ops 被单独检出（worktree / 独立 clone）时，根下 migrations/ 同样放行。"""
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "V1.0.0__init.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
+    assert check_ddl_location(tmp_path) == []
+
+
+def test_ddl_in_business_repo_migrations_dir_is_still_error(tmp_path: Path):
+    """业务仓自建 migrations/ 不能绕过 RL-004。"""
+    sneaky = tmp_path / "rcp-content-patrol" / "migrations"
+    sneaky.mkdir(parents=True)
+    (sneaky / "V9.9.9__hack.sql").write_text("ALTER TABLE t ADD c INT;", encoding="utf-8")
+    assert "RL-004" in codes(check_ddl_location(tmp_path))
+
+
+def test_jdbc_driver_in_business_service_is_error(tmp_path: Path):
+    repo = tmp_path / "rcp-content-patrol"
+    repo.mkdir()
+    (repo / "pom.xml").write_text(_pom_with("com.mysql", "mysql-connector-j"), encoding="utf-8")
+    registry = {"services": [service(), DATAWAY], "libraries": []}
+    assert "RL-005" in codes(check_jdbc_in_business(tmp_path, registry))
+
+
+def test_jdbc_driver_in_data_gateway_is_allowed(tmp_path: Path):
+    repo = tmp_path / "rcp-dataway"
+    repo.mkdir()
+    (repo / "pom.xml").write_text(_pom_with("com.mysql", "mysql-connector-j"), encoding="utf-8")
+    assert check_jdbc_in_business(tmp_path, {"services": [DATAWAY], "libraries": []}) == []
+
+
+def _compose(tmp_path: Path, line: str) -> Path:
+    ops = tmp_path / "rcp-ops"
+    ops.mkdir()
+    target = ops / "docker-compose.yml"
+    target.write_text(line + "\n", encoding="utf-8")
+    return target
+
+
+UPSTREAM_LINE = "      PATROL_ROUTES_ENDPOINTS_CONTENT: http://content-patrol:8081"
+EXCEPTION = {
+    "redline": "RL-007",
+    "scope": "rcp-ops/**",
+    "match": "http://content-patrol:\\d+",
+    "reason": "服务发现未接入",
+    "owner": "platform",
+    "review_by": "2099-01-01",
+}
+
+
+def test_hardcoded_upstream_is_error(tmp_path: Path):
+    _compose(tmp_path, UPSTREAM_LINE)
+    findings = check_hardcoded_upstream(tmp_path, {"services": [service()]})
+    assert "RL-007" in codes(findings)
+
+
+def test_external_service_address_is_not_checked(tmp_path: Path):
+    _compose(tmp_path, "      WEB_URL: http://web:5173")
+    assert check_hardcoded_upstream(tmp_path, {"services": [service()]}) == []
+
+
+def test_registered_exception_downgrades_to_warning(tmp_path: Path):
+    _compose(tmp_path, UPSTREAM_LINE)
+    findings = check_hardcoded_upstream(tmp_path, {"services": [service()]}, [EXCEPTION])
+    assert not codes(findings)
+    assert "RL-007" in codes(findings, level="warn")
+
+
+def test_exception_without_scope_match_still_errors(tmp_path: Path):
+    _compose(tmp_path, "      X: http://message-patrol:8082")
+    findings = check_hardcoded_upstream(tmp_path, {"services": [service(name="message-patrol", port=8082)]}, [EXCEPTION])
+    assert "RL-007" in codes(findings)
+
+
+def test_expired_exception_is_error(tmp_path: Path):
+    _compose(tmp_path, UPSTREAM_LINE)
+    expired = {**EXCEPTION, "review_by": "2020-01-01"}
+    findings = check_hardcoded_upstream(tmp_path, {"services": [service()]}, [expired])
+    assert "RL-007" in codes(findings)
+
+
 def test_real_contracts_repo_is_closed():
-    contracts = Path(__file__).resolve().parent.parent.parent / "rcp-contracts"
+    """集成检查：真实契约仓必须闭合。
+
+    环境变量 RCP_WORKSPACE / RCP_CONTRACTS 用于在 worktree 里验证未合并的改动。
+    """
+    import os
+
+    contracts = Path(os.environ.get("RCP_CONTRACTS")
+                     or Path(__file__).resolve().parent.parent.parent / "rcp-contracts")
+    workspace = Path(os.environ.get("RCP_WORKSPACE") or contracts.parent)
     concepts = Path(__file__).resolve().parent.parent / "concepts"
     if not contracts.is_dir():
         pytest.skip("工作区无 rcp-contracts，跳过集成检查")
     from rcp_ontology.checks import check_all
 
-    assert [f for f in check_all(contracts, concepts) if f.level == "error"] == []
+    errors = [f for f in check_all(contracts, concepts, workspace) if f.level == "error"]
+    assert errors == []

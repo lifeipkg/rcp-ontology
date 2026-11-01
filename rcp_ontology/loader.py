@@ -63,6 +63,16 @@ def load_concepts(concepts_dir: Path) -> dict[str, list[dict[str, Any]]]:
     }
 
 
+def load_redlines(contracts_root: Path) -> dict[str, Any]:
+    """读契约仓的架构红线与例外登记。"""
+    data = read_yaml(contracts_root / "ontology" / "constraints" / "redlines.yaml")
+    if not isinstance(data, dict):
+        raise LoadError("ontology/constraints/redlines.yaml 顶层不是映射")
+    data.setdefault("constraints", [])
+    data.setdefault("exceptions", [])
+    return data
+
+
 def load_decision_schema(contracts_root: Path) -> list[str]:
     """读契约层的决策枚举（真源之一）。"""
     data = read_yaml(contracts_root / "contracts" / "schemas" / "decision.yaml") or {}

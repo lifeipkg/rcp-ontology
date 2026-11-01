@@ -1,7 +1,13 @@
-"""一致性检查：登记（ABox）↔ 概念（TBox）↔ 契约层。
+"""一致性检查：登记（ABox）↔ 概念（TBox）↔ 契约层 ↔ 仓布局。
 
-只做机械判定：结构完整性、红线约束、枚举逐字一致。语义充分性由主会话核对原文，
-不由本检查器宣称"绝对完整"。
+只做机械判定：结构完整性、红线约束、枚举逐字一致、DDL 与 JDBC 的落位、上游地址
+是否写死。语义充分性由主会话核对原文，不由本检查器宣称"绝对完整"。
+
+编号约定：
+- ``RL-00x`` 对应 redlines.yaml 登记的红线
+- ``E1xx``/``E2xx`` 登记、概念、契约层的结构错误
+- ``E3xx`` 红线自身的元检查（声明但无实现）
+- ``W3xx`` 提示，不计入失败
 """
 
 from __future__ import annotations
@@ -9,9 +15,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .loader import Finding, load_concepts, load_decision_schema, load_registry
+from .layout import (
+    check_ddl_location,
+    check_hardcoded_upstream,
+    check_jdbc_in_business,
+)
+from .loader import (
+    Finding,
+    load_concepts,
+    load_decision_schema,
+    load_redlines,
+    load_registry,
+)
 
 REQUIRED_SERVICE_FIELDS = ("name", "repo", "kind", "port", "external", "owner", "capabilities")
+
+# 检查器有能力判定的红线编号。新增红线先在实现侧登记，再写进 redlines.yaml；
+# 只写 YAML 不写实现会被 E301 判为纸面红线。
+IMPLEMENTED_REDLINES = frozenset(
+    {"RL-001", "RL-002", "RL-003", "RL-004", "RL-005", "RL-006", "RL-007"}
+)
 
 
 def check_registry_shape(registry: dict[str, Any]) -> list[Finding]:
@@ -59,7 +82,8 @@ def check_redlines(registry: dict[str, Any], concepts: dict[str, list[dict[str, 
                 continue
             dep_kind = dep_service.get("kind")
             if dep_kind not in allowed:
-                code = "RL-001" if kind == "patrol-line" and dep_kind == "patrol-line" else "RL-001"
+                # RL-001 专指巡查线互调；其他种类违规归内置编号 E106，避免编号失去定位意义。
+                code = "RL-001" if kind == "patrol-line" and dep_kind == "patrol-line" else "E106"
                 findings.append(
                     Finding(
                         "error",
@@ -148,16 +172,53 @@ def check_contracts_exist(contracts_root: Path, registry: dict[str, Any]) -> lis
     return findings
 
 
-def check_all(contracts_root: Path, concepts_dir: Path | None = None) -> list[Finding]:
-    """跑全部检查。concepts_dir 缺省为本仓 concepts/。"""
+def check_redline_coverage(redlines: dict[str, Any]) -> list[Finding]:
+    """E301 声明了但检查器没有实现（纸面红线）/ W302 有实现但未登记。
+
+    这是防"红线只写在 YAML 里、CI 根本判不了"的元检查。新增红线必须先在本文件的
+    IMPLEMENTED_REDLINES 登记实现，再写进 redlines.yaml，否则本检查即红。
+    """
+    findings: list[Finding] = []
+    declared = [c.get("id") for c in redlines.get("constraints", [])]
+    for redline_id in declared:
+        if redline_id not in IMPLEMENTED_REDLINES:
+            finding = Finding(
+                "error",
+                "E301",
+                f"{redline_id} 在 redlines.yaml 声明，但检查器没有对应实现（纸面红线）",
+            )
+            findings.append(finding)
+    for redline_id in sorted(IMPLEMENTED_REDLINES - set(declared)):
+        findings.append(
+            Finding("warn", "W302", f"{redline_id} 有实现，但未在 redlines.yaml 登记")
+        )
+    return findings
+
+
+def check_all(
+    contracts_root: Path,
+    concepts_dir: Path | None = None,
+    workspace_root: Path | None = None,
+) -> list[Finding]:
+    """跑全部检查。
+
+    contracts_root: 契约仓根；concepts_dir: TBox 目录（缺省本仓 concepts/）；
+    workspace_root: 多仓工作区根（缺省取契约仓的父目录，用于仓布局级红线）。
+    """
     concepts_dir = concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
+    workspace_root = workspace_root or contracts_root.parent
     registry = load_registry(contracts_root)
     concepts = load_concepts(concepts_dir)
+    redlines = load_redlines(contracts_root)
 
     findings: list[Finding] = []
+    findings += check_redline_coverage(redlines)
     findings += check_registry_shape(registry)
     findings += check_redlines(registry, concepts)
     findings += check_decision_alignment(contracts_root, concepts)
     findings += check_tbox_abox(registry, concepts)
     findings += check_contracts_exist(contracts_root, registry)
+    findings += check_ddl_location(workspace_root)
+    findings += check_jdbc_in_business(workspace_root, registry)
+    findings += check_hardcoded_upstream(workspace_root, registry, redlines.get("exceptions", []))
     return findings
