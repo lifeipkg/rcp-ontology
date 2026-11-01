@@ -74,12 +74,14 @@ python -m pytest -q
 | 编号 | 判据 | 级别 |
 |---|---|---|
 | E108 | 依赖成环 | error |
-| E109 | 非入口节点入度为 0（可能是备用通道，也可能漏登记依赖方） | warn |
-| E110 | 从任何对外入口都不可达 | warn |
+| E109 | 非入口节点入度为 0（可能是备用通道，也可能漏登记依赖方）；命中 `expected.no_dependents` 声明且未过期则静默 | warn |
+| E110 | 从任何对外入口都不可达；命中 `expected.unreachable` 声明且未过期则静默 | warn |
 | E111 | 能力的 owner 未在 services/libraries 登记 | error |
 | E112 | 能力的 owner 并未声明持有该能力（归属与实现不符） | error |
 | E113 | TBox 内部悬空：`allowed_depends_on_kinds` 引用未声明种类，或缺显式布尔属性 | error |
 | E114 | 能力名不符合点分小写规范（如 `Patrol_Dispatch`） | error |
+| E115 | 服务 `expected` 预期状态声明不合法（非映射 / 未知字段 / 标志非布尔 / 缺 reason/owner/review_by / review_by 非日期） | error |
+| W306 | `expected` 声明与事实不符（声明无依赖但已有依赖方 / 声明不可达但已可达），提示移除过时声明 | warn |
 
 ### 红线与元检查
 

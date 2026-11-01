@@ -16,6 +16,7 @@ from rcp_ontology.checks import (
     check_contracts_exist,
     check_decision_alignment,
     check_dependency_graph,
+    check_expected_state,
     check_redlines,
     check_registry_shape,
     check_repo_registration,
@@ -512,6 +513,76 @@ def test_unreachable_node_is_warning():
     lonely = service(name="lonely", port=8099, capabilities=[])
     findings = check_dependency_graph({"services": [gateway(), service(), lonely]}, CONCEPTS)
     assert "E110" in codes(findings, level="warn")
+
+
+def _expected(**overrides):
+    base = {
+        "no_dependents": True,
+        "unreachable": True,
+        "reason": "数据面尚未启用",
+        "owner": "platform",
+        "review_by": "2099-01-01",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_expected_state_suppresses_e109_and_e110():
+    lonely = service(name="dataway", port=8090, capabilities=[], expected=_expected())
+    findings = check_dependency_graph({"services": [gateway(), lonely]}, CONCEPTS)
+    assert "E109" not in codes(findings, level="warn")
+    assert "E110" not in codes(findings, level="warn")
+
+
+def test_expired_expected_state_restores_warning():
+    lonely = service(name="dataway", port=8090, capabilities=[],
+                     expected=_expected(review_by="2020-01-01"))
+    findings = check_dependency_graph({"services": [gateway(), lonely]}, CONCEPTS)
+    assert "E109" in codes(findings, level="warn")
+    assert "E110" in codes(findings, level="warn")
+
+
+def test_stale_expected_no_dependents_is_warning():
+    # gateway 依赖 content-patrol，故其入度为 1，声明"无依赖"即过时。
+    s = service(expected=_expected())
+    findings = check_dependency_graph({"services": [gateway(), s]}, CONCEPTS)
+    assert "W306" in codes(findings, level="warn")
+
+
+def test_stale_expected_unreachable_is_warning():
+    # content-patrol 可从 gateway 到达，声明"不可达"即过时。
+    s = service(expected=_expected())
+    findings = check_dependency_graph({"services": [gateway(), s]}, CONCEPTS)
+    assert "W306" in codes(findings, level="warn")
+
+
+def test_expected_state_declaring_flag_requires_audit_fields():
+    s = service(expected={"no_dependents": True})
+    findings = check_expected_state({"services": [s]})
+    assert "E115" in codes(findings)
+
+
+def test_expected_state_unknown_field_is_error():
+    s = service(expected={**_expected(), "bogus": 1})
+    findings = check_expected_state({"services": [s]})
+    assert "E115" in codes(findings)
+
+
+def test_expected_state_non_bool_flag_is_error():
+    s = service(expected=_expected(no_dependents="yes"))
+    findings = check_expected_state({"services": [s]})
+    assert "E115" in codes(findings)
+
+
+def test_expected_state_bad_review_by_is_error():
+    s = service(expected=_expected(review_by="not-a-date"))
+    findings = check_expected_state({"services": [s]})
+    assert "E115" in codes(findings)
+
+
+def test_valid_expected_state_has_no_findings():
+    s = service(expected=_expected())
+    assert check_expected_state({"services": [s]}) == []
 
 
 def test_capability_owner_must_be_registered():
