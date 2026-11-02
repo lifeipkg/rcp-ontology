@@ -34,17 +34,10 @@ from .loader import (
     load_decision_schema,
     load_redlines,
     load_registry,
-    load_terms,
     read_yaml,
 )
 
 REQUIRED_SERVICE_FIELDS = ("name", "repo", "kind", "external", "owner", "capabilities")
-
-# 能力命名：小写点分，至少两段（域.动作）。多人协作时这防"同概念两套叫法"。
-CAPABILITY_NAME = re.compile(r"^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$")
-
-# TBox 上必须显式声明的布尔属性。缺省推断会让人误判检查器行为，因此要求写全。
-KIND_BOOL_PROPS = ("must_be_external", "is_entry", "requires_port", "requires_contract")
 
 # 规则规格（policy-as-code）已知的执行器类型与必填字段。
 # 每条红线的 spec.type 决定执行器，缺必填字段即 E302；无 spec 即 E301（纸面红线）。
@@ -81,13 +74,11 @@ def _kind_prop(
     return bool(rule.get(prop, default))
 
 
-def check_registry_shape(
-    registry: dict[str, Any],
-    concepts: dict[str, list[dict[str, Any]]] | None = None,
-) -> list[Finding]:
-    """E001 必填字段 / E002 重名、repo 重复、端口冲突。
+def check_registry_shape(registry: dict[str, Any]) -> list[Finding]:
+    """E001 必填字段（键存在性）/ E002 重名、repo 重复、端口冲突。
 
-    port 是否必填由种类属性 requires_port 决定（元仓不需要端口）。
+    port 是否必填已由 SHACL（requires_port 动态 shape）承担；这里只查「键是否存在」——
+    这是 SHACL 表达不了的信息（capabilities 空列表合法、键缺失与值为空在图里无法区分）。
     """
     findings: list[Finding] = []
     names: set[str] = set()
@@ -95,10 +86,7 @@ def check_registry_shape(
     ports: dict[int, str] = {}
     for service in registry.get("services", []):
         name = service.get("name", "<未命名>")
-        kind = service.get("kind")
         required = list(REQUIRED_SERVICE_FIELDS)
-        if _kind_prop(concepts, kind, "requires_port", True):
-            required.append("port")
         missing = [f for f in required if f not in service]
         if missing:
             findings.append(Finding("error", "E001", f"{name} 缺少必填字段: {', '.join(missing)}"))
@@ -122,52 +110,6 @@ def check_registry_shape(
                     Finding("error", "E002", f"端口 {port} 被 {ports[port]} 与 {name} 同时占用")
                 )
             ports[port] = name
-    return findings
-
-
-def check_redlines(registry: dict[str, Any], concepts: dict[str, list[dict[str, Any]]]) -> list[Finding]:
-    """RL-001 / RL-002 与种类级依赖约束。"""
-    findings: list[Finding] = []
-    services = {s.get("name"): s for s in registry.get("services", [])}
-    kind_rule = _kind_map(concepts)
-
-    for name, service in services.items():
-        kind = service.get("kind")
-        rule = kind_rule.get(kind)
-        if rule is None:
-            continue
-        depends_on = service.get("depends_on") or []
-        allowed = set(rule.get("allowed_depends_on_kinds") or [])
-        for dep in depends_on:
-            dep_service = services.get(dep)
-            if dep_service is None:
-                findings.append(
-                    Finding("error", "E105", f"{name} 依赖未登记的服务: {dep}")
-                )
-                continue
-            dep_kind = dep_service.get("kind")
-            if dep_kind not in allowed:
-                # RL-001 专指巡查线互调；其他种类违规归内置编号 E106，避免编号失去定位意义。
-                code = "RL-001" if kind == "patrol-line" and dep_kind == "patrol-line" else "E106"
-                findings.append(
-                    Finding(
-                        "error",
-                        code,
-                        f"{name}({kind}) 不允许依赖 {dep}({dep_kind})；"
-                        f"允许的依赖种类: {sorted(allowed) or '无'}",
-                    )
-                )
-
-        external = bool(service.get("external"))
-        must_external = bool(rule.get("must_be_external"))
-        if must_external and not external:
-            findings.append(
-                Finding("error", "RL-002", f"{name}({kind}) 必须 external=true，当前为 false")
-            )
-        if external and not must_external:
-            findings.append(
-                Finding("error", "RL-002", f"{name}({kind}) 不得对外暴露，当前 external=true")
-            )
     return findings
 
 
@@ -232,39 +174,16 @@ def _load_contract_scores(contracts_root: Path, field: str = "x-base-score") -> 
     return scores if isinstance(scores, dict) else None
 
 
-def check_tbox_abox(registry: dict[str, Any], concepts: dict[str, list[dict[str, Any]]]) -> list[Finding]:
-    """E201 种类未声明 / E202 能力未声明 / W301 能力声明但无人使用。"""
-    findings: list[Finding] = []
-    kinds = {k["name"] for k in concepts["kinds"]}
-    caps = {c["name"] for c in concepts["capabilities"]}
-    used_caps: set[str] = set()
-
-    for service in registry.get("services", []):
-        name = service.get("name")
-        if service.get("kind") not in kinds:
-            findings.append(Finding("error", "E201", f"{name} 的 kind={service.get('kind')} 未在 TBox 声明"))
-        for cap in service.get("capabilities") or []:
-            used_caps.add(cap)
-            if cap not in caps:
-                findings.append(Finding("error", "E202", f"{name} 使用未立名的能力: {cap}"))
-
-    for library in registry.get("libraries", []):
-        for cap in library.get("capabilities") or []:
-            used_caps.add(cap)
-            if cap not in caps:
-                findings.append(Finding("error", "E202", f"{library.get('name')} 使用未立名的能力: {cap}"))
-
-    for cap in sorted(caps - used_caps):
-        findings.append(Finding("warn", "W301", f"能力 {cap} 已立名但无服务使用"))
-    return findings
-
-
 def check_contracts_exist(
     contracts_root: Path,
     registry: dict[str, Any],
     concepts: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[Finding]:
-    """RL-006 提供服务必须挂契约；是否豁免由种类属性 requires_contract 决定。"""
+    """RL-006 契约文件必须存在于磁盘。
+
+    「必须挂契约」（requires_contract 种类缺契约）已由 SHACL（requires_contract
+    动态 shape）承担；这里只做 SHACL 做不了的「文件是否真的存在于磁盘」判定。
+    """
     findings: list[Finding] = []
     for service in registry.get("services", []):
         name = service.get("name")
@@ -274,9 +193,6 @@ def check_contracts_exist(
                 findings.append(
                     Finding("warn", "RL-006", f"{name}({service.get('kind')}) 不应挂后端契约")
                 )
-            continue
-        if not contracts:
-            findings.append(Finding("error", "RL-006", f"{name} 未挂契约"))
             continue
         for rel in contracts:
             if not (contracts_root / rel).is_file():
@@ -344,42 +260,11 @@ def check_rule_specs(redlines: dict[str, Any]) -> list[Finding]:
     return findings
 
 
-def check_tbox_integrity(concepts: dict[str, list[dict[str, Any]]]) -> list[Finding]:
-    """E113 TBox 内部自洽：引用悬空的种类、缺显式布尔属性。
-
-    TBox 是检查器行为的输入。它的属性写错（或漏写）会让所有下游判定静默退化，
-    所以这里也要求 must_be_external / is_entry / requires_port / requires_contract
-    四个属性显式写全，不靠默认值推断。
-    """
-    findings: list[Finding] = []
-    kinds = {k["name"] for k in concepts["kinds"]}
-    for kind in concepts["kinds"]:
-        for ref in kind.get("allowed_depends_on_kinds") or []:
-            if ref not in kinds:
-                findings.append(
-                    Finding(
-                        "error",
-                        "E113",
-                        f"kind {kind['name']} 的 allowed_depends_on_kinds 引用了未声明种类: {ref}",
-                    )
-                )
-        for prop in KIND_BOOL_PROPS:
-            if not isinstance(kind.get(prop), bool):
-                findings.append(
-                    Finding(
-                        "error",
-                        "E113",
-                        f"kind {kind['name']} 缺布尔属性 {prop}（决定检查器行为，必须显式声明）",
-                    )
-                )
-    return findings
-
-
 def check_capability_ownership(
     registry: dict[str, Any],
     concepts: dict[str, list[dict[str, Any]]],
 ) -> list[Finding]:
-    """E111 能力归属悬空 / E112 归属与实现不符 / W304 多实现未声明。
+    """E111 能力归属悬空 / E112 归属与实现不符。
 
     owner 是多人协作的责任锚点：改一个能力必须先知道找谁。归属写错等于没有归属。
     """
@@ -412,55 +297,6 @@ def check_capability_ownership(
                     f"能力 {cap} 声明 owner={owner}，但 {owner} 并未声明持有该能力；"
                     f"实际持有者: {sorted(holders) or '无'}",
                 )
-            )
-        others = holders - {owner}
-        if others:
-            findings.append(
-                Finding(
-                    "warn",
-                    "W304",
-                    f"能力 {cap} 除 owner={owner} 外还由 {sorted(others)} 持有（多实现需在术语层注明）",
-                )
-            )
-    return findings
-
-
-def check_capability_names(concepts: dict[str, list[dict[str, Any]]]) -> list[Finding]:
-    """E114 能力命名不符合点分小写规范。多人协作时命名分裂比缺命名更难治。"""
-    findings: list[Finding] = []
-    for concept in concepts["capabilities"]:
-        name = concept.get("name") or ""
-        if not CAPABILITY_NAME.match(name):
-            findings.append(
-                Finding(
-                    "error",
-                    "E114",
-                    f"能力名 {name!r} 不符合点分小写规范（示例: patrol.content.dedup）",
-                )
-            )
-    return findings
-
-
-def check_term_coverage(
-    concepts: dict[str, list[dict[str, Any]]],
-    terms: list[dict[str, Any]],
-) -> list[Finding]:
-    """W303 种类未在词汇表立名。
-
-    只校验 kinds —— 种类是平台骨架，数量少、变动慢，必须有中文名与定义；
-    capability 数量多，改由 E114 的命名规范约束。
-    """
-    findings: list[Finding] = []
-    if not terms:
-        findings.append(Finding("warn", "W303", "未找到 vocabulary/terms.yaml，种类未立名"))
-        return findings
-    covered: set[str] = set()
-    for term in terms:
-        covered.update(term.get("covers") or [])
-    for kind in concepts["kinds"]:
-        if kind["name"] not in covered:
-            findings.append(
-                Finding("warn", "W303", f"种类 {kind['name']} 未在 terms.yaml 立名（covers 缺失）")
             )
     return findings
 
@@ -676,34 +512,59 @@ def _spec_by_id(redlines: dict[str, Any], redline_id: str) -> dict[str, Any] | N
     return None
 
 
+def check_shacl(
+    registry: dict[str, Any],
+    concepts: dict[str, list[dict[str, Any]]],
+) -> list[Finding]:
+    """用 SHACL（静态 + 动态 shapes）验证导出的 RDF 图，映射回 Finding。
+
+    覆盖从 Python 迁移到声明式约束的检查：E105 依赖未登记、E106/RL-001 依赖
+    白名单、RL-002 external 方向、E201 种类声明、E202 能力立名、E113 TBox 自洽、
+    E114 命名、RL-006 挂契约。这些全部是「值/关系约束」，在 RDF 图上无损表达；
+    键存在性、跨源比对、文件扫描等不在 SHACL 能力内，仍由本文件其它函数承担。
+    """
+    from rcp_ontology.semweb import build_rdf, validate_all
+
+    shapes_path = Path(__file__).resolve().parent.parent / "ontology" / "constraints.ttl"
+    graph = build_rdf(registry, concepts)
+    _, findings = validate_all(graph, shapes_path, concepts)
+    return [
+        Finding("error", f.code, f"{f.focus}: {f.message}" if f.focus else f.message)
+        for f in findings
+    ]
+
+
 def check_declarations(
     contracts_root: Path,
     concepts_dir: Path | None = None,
 ) -> list[Finding]:
-    """只跑声明层检查：登记/契约/红线/图/归属/命名/词汇，不碰工作区文件布局。
+    """只跑声明层检查：登记/契约/红线/图/归属/SHACL，不碰工作区文件布局。
 
     contracts_root: 契约仓根；concepts_dir: TBox 目录（缺省本仓 concepts/）。
     这些检查只依赖声明文件，任何单仓环境都能复算，是架构熵基线对比的范围。
+
+    两轨分工：
+      - checks.py 保留：键存在性（E001）、唯一键（E002）、跨源比对（RL-003）、
+        契约文件存在（RL-006）、能力归属（E111/E112）、expected 形状（E115）、
+        图连通性（E108/E109/E110/W306）、红线元检查（E301/E302）。
+      - SHACL 迁移：依赖登记（E105）、依赖白名单（E106/RL-001）、external 方向
+        （RL-002）、种类/能力声明（E201/E202）、TBox 自洽（E113）、命名（E114）、
+        挂契约（RL-006 的 minCount 部分）。
     """
     concepts_dir = concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
     registry = load_registry(contracts_root)
     concepts = load_concepts(concepts_dir)
     redlines = load_redlines(contracts_root)
-    terms = load_terms(contracts_root)
 
     findings: list[Finding] = []
     findings += check_rule_specs(redlines)
-    findings += check_registry_shape(registry, concepts)
+    findings += check_registry_shape(registry)
     findings += check_expected_state(registry)
-    findings += check_redlines(registry, concepts)
     findings += check_decision_alignment(contracts_root, concepts, _spec_by_id(redlines, "RL-003"))
-    findings += check_tbox_abox(registry, concepts)
     findings += check_contracts_exist(contracts_root, registry, concepts)
-    findings += check_tbox_integrity(concepts)
     findings += check_capability_ownership(registry, concepts)
-    findings += check_capability_names(concepts)
-    findings += check_term_coverage(concepts, terms)
     findings += check_dependency_graph(registry, concepts)
+    findings += check_shacl(registry, concepts)
     return findings
 
 

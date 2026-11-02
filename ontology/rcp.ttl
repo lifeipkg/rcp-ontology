@@ -21,6 +21,7 @@ rcp:Meta          a owl:Class .
 rcp:Library       a owl:Class .
 rcp:Capability    a owl:Class .
 rcp:Decision      a owl:Class .
+rcp:Kind          a owl:Class .
 
 # ---- 对象属性 ----
 
@@ -34,6 +35,10 @@ rcp:hasCapability a owl:ObjectProperty ;
                   rdfs:domain rcp:Service ;
                   rdfs:range  rcp:Capability .
 
+rcp:allowsDependsOn a owl:ObjectProperty ;
+                  rdfs:domain rcp:Kind ;
+                  rdfs:range  rcp:Kind .
+
 # ---- 数据属性 ----
 
 rcp:port          a owl:DatatypeProperty ; rdfs:range xsd:integer .
@@ -43,3 +48,10 @@ rcp:owner         a owl:DatatypeProperty ; rdfs:range xsd:string .
 rcp:artifact      a owl:DatatypeProperty ; rdfs:range xsd:string .
 rcp:name          a owl:DatatypeProperty ; rdfs:range xsd:string .
 rcp:baseScore     a owl:DatatypeProperty ; rdfs:range xsd:integer .
+rcp:contract      a owl:DatatypeProperty ; rdfs:range xsd:string .
+
+# TBox 种类（kind）的四个行为属性，决定检查器判定（见 concepts/kinds.yaml 口径）。
+rcp:mustBeExternal    a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:isEntry           a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:requiresPort      a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:requiresContract  a owl:DatatypeProperty ; rdfs:range xsd:boolean .

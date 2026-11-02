@@ -65,49 +65,64 @@ python -m pytest -q
 
 ## 检查项
 
+检查按实现分两轨，下表「承担」列标注每项由哪一轨执行：
+
+- **SHACL（声明式约束）**：可表达为「值/关系约束」的检查——依赖登记、依赖白名单、external
+  方向、种类/能力声明、TBox 自洽、命名规范、port/contract 必填。约束来自 `ontology/constraints.ttl`
+  （静态）+ `shapes.py` 从 `kinds.yaml` 编译（动态，规则即数据）。
+- **Python（过程式检查）**：SHACL 表达不了的——键存在性、唯一键、跨源比对、契约文件存在、
+  能力归属、图连通性、expected 形状、红线元检查、工作区布局（DDL/JDBC/上游地址扫描）。
+
 ### 结构与归属
 
-| 编号 | 判据 | 级别 |
-|---|---|---|
-| E001 | 服务缺必填字段（name/repo/kind/external/owner/capabilities，port 视 `requires_port`） | error |
-| E002 | 服务名重复、repo 重复、端口冲突 | error |
-| E105 | 依赖了未登记的服务 | error |
-| E106 | 依赖了种类规则不允许的种类（非巡查线互调） | error |
-| E107 | 工作区存在 `rcp-*` 目录但未登记（或反之，仅完整工作区判后者） | error |
-| E201 | kind 未在 TBox 声明 | error |
-| E202 | capability 未在 TBox 立名 | error |
+| 编号 | 判据 | 承担 | 级别 |
+|---|---|---|---|
+| E001 | 服务缺必填字段（name/repo/kind/external/owner/capabilities，port 视 `requires_port`） | Python（键存在）+ SHACL（port 必填） | error |
+| E002 | 服务名重复、repo 重复、端口冲突 | Python | error |
+| E105 | 依赖了未登记的服务 | SHACL | error |
+| E106 | 依赖了种类规则不允许的种类（非巡查线互调） | SHACL | error |
+| E107 | 工作区存在 `rcp-*` 目录但未登记（或反之，仅完整工作区判后者） | Python | error |
+| E201 | kind 未在 TBox 声明 | SHACL | error |
+| E202 | capability 未在 TBox 立名 | SHACL | error |
 
 ### 图与公理
 
-| 编号 | 判据 | 级别 |
-|---|---|---|
-| E108 | 依赖成环 | error |
-| E109 | 非入口节点入度为 0（可能是备用通道，也可能漏登记依赖方）；命中 `expected.no_dependents` 声明且未过期则静默 | warn |
-| E110 | 从任何对外入口都不可达；命中 `expected.unreachable` 声明且未过期则静默 | warn |
-| E111 | 能力的 owner 未在 services/libraries 登记 | error |
-| E112 | 能力的 owner 并未声明持有该能力（归属与实现不符） | error |
-| E113 | TBox 内部悬空：`allowed_depends_on_kinds` 引用未声明种类，或缺显式布尔属性 | error |
-| E114 | 能力名不符合点分小写规范（如 `Patrol_Dispatch`） | error |
-| E115 | 服务 `expected` 预期状态声明不合法（非映射 / 未知字段 / 标志非布尔 / 缺 reason/owner/review_by / review_by 非日期） | error |
-| W306 | `expected` 声明与事实不符（声明无依赖但已有依赖方 / 声明不可达但已可达），提示移除过时声明 | warn |
+| 编号 | 判据 | 承担 | 级别 |
+|---|---|---|---|
+| E108 | 依赖成环 | Python | error |
+| E109 | 非入口节点入度为 0（可能是备用通道，也可能漏登记依赖方）；命中 `expected.no_dependents` 声明且未过期则静默 | Python | warn |
+| E110 | 从任何对外入口都不可达；命中 `expected.unreachable` 声明且未过期则静默 | Python | warn |
+| E111 | 能力的 owner 未在 services/libraries 登记 | Python | error |
+| E112 | 能力的 owner 并未声明持有该能力（归属与实现不符） | Python | error |
+| E113 | TBox 内部悬空：`allowed_depends_on_kinds` 引用未声明种类，或缺显式布尔属性 | SHACL | error |
+| E114 | 能力名不符合点分小写规范（如 `Patrol_Dispatch`） | SHACL | error |
+| E115 | 服务 `expected` 预期状态声明不合法（非映射 / 未知字段 / 标志非布尔 / 缺 reason/owner/review_by / review_by 非日期） | Python | error |
+| W306 | `expected` 声明与事实不符（声明无依赖但已有依赖方 / 声明不可达但已可达），提示移除过时声明 | Python | warn |
 
 ### 红线与元检查
 
-| 编号 | 判据 | 级别 |
+| 编号 | 判据 | 承担 | 级别 |
+|---|---|---|---|
+| E301 | 红线在 `redlines.yaml` 声明但无 `spec` 规格，检查器无法执行（纸面红线） | Python | error |
+| E302 | 红线的 `spec` 规格不合法（type 未知 / 缺必填字段 / 正则无法编译） | Python | error |
+| S001 | 跨仓检查未完整执行（只检出单仓），明示跳过而非静默通过 | Python | info |
+| RL-001 | 巡查线互相调用 | SHACL | error |
+| RL-002 | 对外入口不是网关/前端，或网关未对外 | SHACL | error |
+| RL-003 | 决策枚举或分值在契约层与本体层不一致 | Python | error |
+| RL-004 | `rcp-ops/migrations` 之外出现 DDL | Python | error |
+| RL-005 | 业务服务或基座引入了 JDBC 驱动 | Python | error |
+| RL-006 | 服务未挂契约或契约文件不存在 | SHACL（挂契约）+ Python（文件存在） | error |
+| RL-007 | 部署清单写死内部服务地址；命中已登记例外降为 warn，例外过期转回 error | Python | error/warn |
+
+### 已裁剪的检查
+
+以下三项原为「弱提示」，对 AI 开发模式（个位数服务、以契约仓为真源）无实际收益，已随迁移移除：
+
+| 编号 | 原判据 | 移除原因 |
 |---|---|---|
-| E301 | 红线在 `redlines.yaml` 声明但无 `spec` 规格，检查器无法执行（纸面红线） | error |
-| E302 | 红线的 `spec` 规格不合法（type 未知 / 缺必填字段 / 正则无法编译） | error |
-| W301 | capability 立名但无服务使用 | warn |
-| W303 | 种类未在 `terms.yaml` 立名（`covers` 缺失） | warn |
-| W304 | 能力除 owner 外还有别的实现者（多实现未声明） | warn |
-| S001 | 跨仓检查未完整执行（只检出单仓），明示跳过而非静默通过 | info |
-| RL-001 | 巡查线互相调用 | error |
-| RL-002 | 对外入口不是网关/前端，或网关未对外 | error |
-| RL-003 | 决策枚举或分值在契约层与本体层不一致 | error |
-| RL-004 | `rcp-ops/migrations` 之外出现 DDL | error |
-| RL-005 | 业务服务或基座引入了 JDBC 驱动 | error |
-| RL-006 | 服务未挂契约或契约文件不存在 | error |
-| RL-007 | 部署清单写死内部服务地址；命中已登记例外降为 warn，例外过期转回 error | error/warn |
+| W301 | capability 立名但无服务使用 | 契约仓即真源，能力立名即「被引用」，无「立名而未用」场景 |
+| W303 | 种类未在 `terms.yaml` 立名 | 术语立名与结构约束职责重叠，`kinds.yaml` 已唯一承载种类定义 |
+| W304 | 能力除 owner 外还有别的实现者 | 单 owner 契约模型下不存在多实现，弱提示无裁决价值 |
 
 ## 三条设计约定
 
@@ -135,9 +150,14 @@ python -m pytest -q
 
 ## 语义网层（RDF / OWL / SHACL / SPARQL）
 
-本仓除 YAML + Python 检查器外，另有一层用 W3C 语义网标准实现的能力，与前者"双轨对照"：
-同一份登记（registry）与概念（concepts），既被 `checks.py` 校验，也被 RDF 图 + OWL 推理 +
-SHACL 验证 + SPARQL 查询处理。**YAML 仍是真源**，语义网层是它的图形态，用于交叉验证同一结论。
+本仓的约束校验分两轨执行：**值/关系约束由 SHACL（声明式）承担，过程式检查由 Python 承担**。
+同一份登记（registry）与概念（concepts）先导出为 RDF 图，再交给 SHACL 验证 + OWL 推理 +
+SPARQL 查询处理。**YAML 仍是真源**，RDF 是它的图形态。
+
+- SHACL 是依赖登记、依赖白名单、种类/能力声明、命名规范、port/contract 必填等约束的**唯一实现**
+  （已从 `checks.py` 迁移过来），不再是「对照」而是「本尊」。
+- OWL 与 SPARQL 仍与 `graph.py` 的 BFS 构成交叉验证：依赖闭包有且只有一个正确答案，三种范式算出的
+  闭包必须一致。
 
 ### 四件套分工
 
@@ -145,7 +165,7 @@ SHACL 验证 + SPARQL 查询处理。**YAML 仍是真源**，语义网层是它�
 |---|---|---|---|
 | RDF | 事实如何描述 | `rcp_ontology/semweb/exporter.py`：YAML → 三元组 | `cli.py export` |
 | OWL | 从已知推未知 | `ontology/rcp.ttl` + `reasoner.py`：传递依赖闭包 | 测试交叉验证 |
-| SHACL | 哪里违规 | `ontology/constraints.ttl` + `validator.py` | `cli.py shacl` |
+| SHACL | 哪里违规 | `ontology/constraints.ttl`（静态）+ `shapes.py`（动态，从 `kinds.yaml` 编译）+ `validator.py` | `cli.py shacl` |
 | SPARQL | 如何提问 | `query.py`：属性路径 `dependsOn+` | `cli.py sparql` |
 
 ### 交叉验证：三种范式同一结论
@@ -171,9 +191,11 @@ python rcp_ontology/cli.py sparql --contracts ../rcp-contracts --service dataway
 
 ### 定位与边界
 
-这一层在当前规模（个位数服务）下是"过度的"——它的价值是教学、交叉验证与前瞻：架构治理
-工具在服务膨胀到数百、依赖关系复杂化时，RDF 图 + 推理 + 查询是自然演进方向。
-
-**SHACL 只覆盖"能表达为图形状约束"的红线**（必填、依赖白名单、命名规范）；文件扫描类红线
-（RL-004 DDL / RL-005 JDBC / RL-007 上游地址）不在 SHACL 能力内，仍由 `checks.py` 承担。
+- **SHACL 覆盖「能表达为图形状约束」的检查**（必填、依赖白名单、external 方向、声明归属、
+  命名规范）。文件扫描类红线（RL-004 DDL / RL-005 JDBC / RL-007 上游地址）、跨源比对（RL-003）、
+  键存在性与唯一键（E001 键存在 / E002）、图连通性（E108/E109/E110）不在 SHACL 能力内，
+  仍由 `checks.py` 承担。
+- **OWL/SPARQL 与 BFS 的交叉验证**仍保留：这是三种独立实现对齐同一图语义的回归护栏，防止
+  任意一种实现漂移。其余部分在当前规模（个位数服务）下是"过度的"，价值在教学与前瞻——架构
+  治理工具在服务膨胀到数百、依赖关系复杂化时，RDF 图 + 推理 + 查询是自然演进方向。
 
