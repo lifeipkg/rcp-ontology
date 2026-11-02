@@ -5,6 +5,11 @@
     python rcp_ontology/cli.py render --contracts ../rcp-contracts --out SERVICES.md
     python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway
     python rcp_ontology/cli.py owners --contracts ../rcp-contracts [--out .github/CODEOWNERS]
+
+语义网层（RDF / OWL / SHACL / SPARQL，双轨对照，不改 YAML 真源）：
+    python rcp_ontology/cli.py export --contracts ../rcp-contracts --out services.ttl
+    python rcp_ontology/cli.py shacl  --contracts ../rcp-contracts
+    python rcp_ontology/cli.py sparql --contracts ../rcp-contracts --service dataway
 """
 
 from __future__ import annotations
@@ -350,6 +355,93 @@ def cmd_owners(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """L1 导出：YAML 声明 → RDF/Turtle。YAML 仍是真源，RDF 是它的图形态。"""
+    contracts = Path(args.contracts).resolve()
+    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
+    try:
+        registry = load_registry(contracts)
+        concepts = load_concepts(concepts_dir or ONTOLOGY_ROOT / "concepts")
+    except LoadError as exc:
+        print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
+        return 2
+
+    from rcp_ontology.semweb import build_rdf
+
+    graph = build_rdf(registry, concepts)
+    text = graph.serialize(format="turtle")
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"已导出 {len(graph)} 个三元组到: {args.out}")
+    else:
+        print(text)
+    return 0
+
+
+def cmd_shacl(args: argparse.Namespace) -> int:
+    """L3 验证：对导出的 RDF 图跑 SHACL 约束，与 checks.py 的红线形成对照。"""
+    contracts = Path(args.contracts).resolve()
+    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
+    try:
+        registry = load_registry(contracts)
+        concepts = load_concepts(concepts_dir or ONTOLOGY_ROOT / "concepts")
+    except LoadError as exc:
+        print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
+        return 2
+
+    from rcp_ontology.semweb import build_rdf, validate
+
+    graph = build_rdf(registry, concepts)
+    shapes = ONTOLOGY_ROOT / "ontology" / "constraints.ttl"
+    conforms, findings = validate(graph, shapes)
+
+    if args.json:
+        print(json.dumps({
+            "conforms": conforms,
+            "findings": [{"path": f.path, "message": f.message} for f in findings],
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(f"SHACL 约束验证（{shapes.name}）：{'合规' if conforms else '不合规'}")
+        for f in findings:
+            print(f"  - {f.path}: {f.message}")
+    return 0 if conforms else 1
+
+
+def cmd_sparql(args: argparse.Namespace) -> int:
+    """L4 查询：SPARQL 属性路径（dependsOn+）算依赖闭包，对照 impact 命令。"""
+    contracts = Path(args.contracts).resolve()
+    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
+    try:
+        registry = load_registry(contracts)
+        concepts = load_concepts(concepts_dir or ONTOLOGY_ROOT / "concepts")
+    except LoadError as exc:
+        print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
+        return 2
+
+    from rcp_ontology.semweb import (
+        build_rdf,
+        sparql_dependencies_of,
+        sparql_dependents_of,
+    )
+
+    graph = build_rdf(registry, concepts)
+    name = args.service
+    upstream = sparql_dependencies_of(graph, name)
+    downstream = sparql_dependents_of(graph, name)
+
+    if args.json:
+        print(json.dumps({
+            "service": name,
+            "depends_on": sorted(upstream),
+            "depended_by": sorted(downstream),
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(f"服务 {name}（SPARQL 属性路径 dependsOn+）")
+        print(f"  依赖闭包   : {', '.join(sorted(upstream)) or '无'}")
+        print(f"  被依赖闭包 : {', '.join(sorted(downstream)) or '无'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rcp-ontology", description="风控平台本体检查器")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -395,6 +487,26 @@ def build_parser() -> argparse.ArgumentParser:
     owners.add_argument("--org", help="GitHub 组织名，给出时生成 @org/team 形式")
     owners.add_argument("--out", help="输出文件，缺省打印")
     owners.set_defaults(func=cmd_owners)
+
+    export = sub.add_parser("export", help="把 YAML 声明导出为 RDF/Turtle（语义网层 L1）")
+    export.add_argument("--contracts", required=True, help="契约仓根目录")
+    export.add_argument("--concepts", help="TBox 目录")
+    export.add_argument("--out", help="输出 Turtle 文件，缺省打印到 stdout")
+    export.set_defaults(func=cmd_export)
+
+    shacl = sub.add_parser("shacl", help="用 SHACL shapes 验证导出的 RDF 图（语义网层 L3）")
+    shacl.add_argument("--contracts", required=True, help="契约仓根目录")
+    shacl.add_argument("--concepts", help="TBox 目录")
+    shacl.add_argument("--json", action="store_true", help="输出 JSON")
+    shacl.set_defaults(func=cmd_shacl)
+
+    sparql = sub.add_parser("sparql", help="用 SPARQL 属性路径查依赖闭包（语义网层 L4）")
+    sparql.add_argument("--contracts", required=True, help="契约仓根目录")
+    sparql.add_argument("--concepts", help="TBox 目录")
+    sparql.add_argument("--service", required=True, help="服务名（registry 里的 name）")
+    sparql.add_argument("--json", action="store_true", help="输出 JSON")
+    sparql.set_defaults(func=cmd_sparql)
+
     return parser
 
 

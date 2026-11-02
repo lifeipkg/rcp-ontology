@@ -132,3 +132,48 @@ python -m pytest -q
 - **强**：结构完整、枚举一致、DDL/JDBC 落位、依赖种类越界 —— 违反即确定有错
 - **弱**：入度为 0、不可达、术语未立名 —— 只能提示"这里值得看一眼"，不能断定是错
   （例如 dataway / db-ops 入度为 0 是因为数据面尚未启用，不是漏登记）
+
+## 语义网层（RDF / OWL / SHACL / SPARQL）
+
+本仓除 YAML + Python 检查器外，另有一层用 W3C 语义网标准实现的能力，与前者"双轨对照"：
+同一份登记（registry）与概念（concepts），既被 `checks.py` 校验，也被 RDF 图 + OWL 推理 +
+SHACL 验证 + SPARQL 查询处理。**YAML 仍是真源**，语义网层是它的图形态，用于交叉验证同一结论。
+
+### 四件套分工
+
+| 技术 | 回答的问题 | 本仓对应 | 命令 |
+|---|---|---|---|
+| RDF | 事实如何描述 | `rcp_ontology/semweb/exporter.py`：YAML → 三元组 | `cli.py export` |
+| OWL | 从已知推未知 | `ontology/rcp.ttl` + `reasoner.py`：传递依赖闭包 | 测试交叉验证 |
+| SHACL | 哪里违规 | `ontology/constraints.ttl` + `validator.py` | `cli.py shacl` |
+| SPARQL | 如何提问 | `query.py`：属性路径 `dependsOn+` | `cli.py sparql` |
+
+### 交叉验证：三种范式同一结论
+
+依赖闭包有且只有一个正确答案，这里用三种范式分别计算、断言一致：
+
+- `graph.py` 的 BFS —— 手写图算法
+- `reasoner.py` 的 owlrl 物化 —— OWL 推理机（`dependsOn` 声明为 `owl:TransitiveProperty`）
+- `query.py` 的 `dependsOn+` —— SPARQL 属性路径
+
+见 `tests/test_semweb.py`，对真实登记逐个服务断言三者闭包相等。
+
+```bash
+# 导出 RDF（默认打 stdout，--out 才落文件；生成物不入库）
+python rcp_ontology/cli.py export --contracts ../rcp-contracts --out /tmp/services.ttl
+
+# SHACL 验证（合规退 0，不合规退 1）
+python rcp_ontology/cli.py shacl --contracts ../rcp-contracts
+
+# SPARQL 依赖闭包（对照 impact 命令）
+python rcp_ontology/cli.py sparql --contracts ../rcp-contracts --service dataway
+```
+
+### 定位与边界
+
+这一层在当前规模（个位数服务）下是"过度的"——它的价值是教学、交叉验证与前瞻：架构治理
+工具在服务膨胀到数百、依赖关系复杂化时，RDF 图 + 推理 + 查询是自然演进方向。
+
+**SHACL 只覆盖"能表达为图形状约束"的红线**（必填、依赖白名单、命名规范）；文件扫描类红线
+（RL-004 DDL / RL-005 JDBC / RL-007 上游地址）不在 SHACL 能力内，仍由 `checks.py` 承担。
+
