@@ -46,10 +46,13 @@ def _service_node(g: Graph, name: str, service: dict[str, Any]) -> None:
         g.add((node, RCP.owner, Literal(str(service["owner"]))))
     if service.get("repo"):
         g.add((node, RCP.repo, Literal(str(service["repo"]))))
+    g.add((node, RCP.name, Literal(str(name))))
     for dep in service.get("depends_on") or []:
         g.add((node, RCP.dependsOn, RCP[str(dep)]))
     for cap in service.get("capabilities") or []:
         g.add((node, RCP.hasCapability, RCP[str(cap)]))
+    for rel in service.get("contracts") or []:
+        g.add((node, RCP.contract, Literal(str(rel))))
 
 
 def _library_node(g: Graph, name: str, library: dict[str, Any]) -> None:
@@ -61,6 +64,32 @@ def _library_node(g: Graph, name: str, library: dict[str, Any]) -> None:
         g.add((node, RCP.artifact, Literal(str(library["artifact"]))))
     for cap in library.get("capabilities") or []:
         g.add((node, RCP.hasCapability, RCP[str(cap)]))
+
+
+def _kind_node(g: Graph, kind: dict[str, Any]) -> None:
+    """把 TBox 的一个 kind 声明导出为 rcp:Kind 实例。
+
+    kind 类名与 service 的 rdf:type 共用 kind_class 命名（patrol-line -> PatrolLine），
+    因此 E201（service 的 kind 类必须是已声明的 rcp:Kind）与 E113（引用悬空）都能
+    在图上闭环：未声明的 kind 类不会挂 rcp:Kind 类型。
+    """
+    name = kind.get("name")
+    if not name:
+        return
+    node = RCP[kind_class(str(name))]
+    g.add((node, RDF.type, RCP.Kind))
+    g.add((node, RCP.name, Literal(str(name))))
+    for prop, attr in (
+        ("must_be_external", RCP.mustBeExternal),
+        ("is_entry", RCP.isEntry),
+        ("requires_port", RCP.requiresPort),
+        ("requires_contract", RCP.requiresContract),
+    ):
+        value = kind.get(prop)
+        if isinstance(value, bool):
+            g.add((node, attr, Literal(value, datatype=XSD.boolean)))
+    for allowed in kind.get("allowed_depends_on_kinds") or []:
+        g.add((node, RCP.allowsDependsOn, RCP[kind_class(str(allowed))]))
 
 
 def build_rdf(registry: dict[str, Any], concepts: dict[str, Any]) -> Graph:
@@ -82,6 +111,9 @@ def build_rdf(registry: dict[str, Any], concepts: dict[str, Any]) -> Graph:
         name = library.get("name")
         if name:
             _library_node(g, str(name), library)
+
+    for kind in concepts.get("kinds", []):
+        _kind_node(g, kind)
 
     for cap in concepts.get("capabilities", []):
         name = cap.get("name")

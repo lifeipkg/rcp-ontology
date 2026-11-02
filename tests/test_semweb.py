@@ -21,7 +21,7 @@ from rcp_ontology.semweb import (
     infer_transitive,
     inferred_dependents_of,
     sparql_dependents_of,
-    validate,
+    validate_all,
 )
 
 ONTOLOGY_DIR = Path(__file__).resolve().parent.parent / "ontology"
@@ -143,11 +143,13 @@ def test_three_paradigms_agree_on_real_registry():
 
 def test_shacl_conforms_on_valid_data():
     registry = {"services": [
-        _service("api-gateway", "gateway", 8080, depends_on=["content-patrol"]),
-        _service("content-patrol", "patrol-line", 8081),
+        _service("api-gateway", "gateway", 8080, depends_on=["content-patrol"],
+                 contracts=["gateway.contract"]),
+        _service("content-patrol", "patrol-line", 8081,
+                 contracts=["patrol.contract"]),
     ], "libraries": []}
     g = build_rdf(registry, CONCEPTS)
-    conforms, findings = validate(g, ONTOLOGY_DIR / "constraints.ttl")
+    conforms, findings = validate_all(g, ONTOLOGY_DIR / "constraints.ttl", CONCEPTS)
     assert conforms is True
     assert findings == []
 
@@ -155,9 +157,9 @@ def test_shacl_conforms_on_valid_data():
 def test_shacl_catches_missing_port():
     registry = {"services": [_service("api-gateway", "gateway", None)], "libraries": []}
     g = build_rdf(registry, CONCEPTS)
-    conforms, findings = validate(g, ONTOLOGY_DIR / "constraints.ttl")
+    conforms, findings = validate_all(g, ONTOLOGY_DIR / "constraints.ttl", CONCEPTS)
     assert conforms is False
-    assert any(f.path == "port" for f in findings)
+    assert any(f.code == "E001" for f in findings)
 
 
 def test_shacl_catches_patrol_line_cross_call():
@@ -167,6 +169,6 @@ def test_shacl_catches_patrol_line_cross_call():
         _service("b", "patrol-line", 8002),
     ], "libraries": []}
     g = build_rdf(registry, CONCEPTS)
-    conforms, findings = validate(g, ONTOLOGY_DIR / "constraints.ttl")
+    conforms, findings = validate_all(g, ONTOLOGY_DIR / "constraints.ttl", CONCEPTS)
     assert conforms is False
-    assert any("RL-001" in f.message for f in findings)
+    assert any(f.code == "RL-001" for f in findings)

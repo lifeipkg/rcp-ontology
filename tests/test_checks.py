@@ -11,20 +11,15 @@ import pytest
 import yaml
 
 from rcp_ontology.checks import (
-    check_capability_names,
     check_capability_ownership,
     check_contracts_exist,
     check_decision_alignment,
     check_declarations,
     check_dependency_graph,
     check_expected_state,
-    check_redlines,
     check_registry_shape,
     check_repo_registration,
     check_rule_specs,
-    check_tbox_abox,
-    check_tbox_integrity,
-    check_term_coverage,
     diff_findings,
     workspace_is_complete,
 )
@@ -116,77 +111,27 @@ def codes(findings, level="error"):
 
 def test_clean_registry_has_no_errors():
     registry = {"services": [gateway(), service()], "libraries": []}
-    assert check_registry_shape(registry, CONCEPTS) == []
-    assert check_redlines(registry, CONCEPTS) == []
-    assert check_tbox_abox(registry, CONCEPTS) == []
-
-
-def test_patrol_line_cannot_depend_on_patrol_line():
-    other = service(name="message-patrol", port=8082, depends_on=["content-patrol"])
-    findings = check_redlines({"services": [service(), other]}, CONCEPTS)
-    assert "RL-001" in codes(findings)
-
-
-def test_patrol_line_must_not_be_external():
-    findings = check_redlines({"services": [service(external=True)]}, CONCEPTS)
-    assert "RL-002" in codes(findings)
-
-
-def test_gateway_must_be_external():
-    findings = check_redlines({"services": [gateway(external=False)]}, CONCEPTS)
-    assert "RL-002" in codes(findings)
-
-
-def test_frontend_may_depend_on_gateway_only():
-    web = {
-        "name": "web", "repo": "rcp-web", "kind": "frontend", "port": 5173,
-        "external": True, "owner": "platform", "capabilities": [],
-        "depends_on": ["content-patrol"], "contracts": [],
-    }
-    findings = check_redlines({"services": [gateway(), service(), web]}, CONCEPTS)
-    # 非巡查线互调，走内置编号；RL-001 只留给 patrol-line ↔ patrol-line。
-    assert "E106" in codes(findings)
-    assert "RL-001" not in codes(findings)
-
-
-def test_dependency_on_unregistered_service_is_error():
-    findings = check_redlines({"services": [gateway(depends_on=["ghost"])]}, CONCEPTS)
-    assert "E105" in codes(findings)
+    assert check_registry_shape(registry) == []
 
 
 def test_duplicate_name_and_port():
     registry = {"services": [gateway(), gateway(port=8099)]}
-    assert "E002" in codes(check_registry_shape(registry, CONCEPTS))
+    assert "E002" in codes(check_registry_shape(registry))
 
 
 def test_duplicate_repo_is_error():
     registry = {"services": [gateway(), gateway(name="api-gateway-2", port=8099)]}
-    assert "E002" in codes(check_registry_shape(registry, CONCEPTS))
+    assert "E002" in codes(check_registry_shape(registry))
 
 
 def test_missing_required_field():
     broken = service()
     del broken["owner"]
-    assert "E001" in codes(check_registry_shape({"services": [broken]}, CONCEPTS))
-
-
-def test_meta_kind_needs_no_port(tmp_path: Path):
-    """元仓无端口：port 是否必填由 TBox 的 requires_port 决定，不在代码里写死。"""
-    assert check_registry_shape({"services": [meta_service()]}, CONCEPTS) == []
+    assert "E001" in codes(check_registry_shape({"services": [broken]}))
 
 
 def test_meta_kind_needs_no_contract(tmp_path: Path):
     assert check_contracts_exist(tmp_path, {"services": [meta_service()]}, CONCEPTS) == []
-
-
-def test_undeclared_kind_and_capability():
-    findings = check_tbox_abox({"services": [service(kind="unknown", capabilities=["x.y"])]}, CONCEPTS)
-    assert {"E201", "E202"} <= codes(findings)
-
-
-def test_unused_capability_is_warning():
-    findings = check_tbox_abox({"services": [service()]}, CONCEPTS)
-    assert "W301" in codes(findings, level="warn")
 
 
 def test_missing_contract_file(tmp_path: Path):
@@ -606,38 +551,6 @@ def test_capability_ownership_closed_for_real_shape():
         {"services": [gateway(), service()]}, CONCEPTS
     )
     assert findings == []
-
-
-def test_tbox_dangling_kind_reference_is_error():
-    concepts = {
-        "kinds": [{"name": "a", "must_be_external": False, "is_entry": False,
-                   "requires_port": True, "requires_contract": True,
-                   "allowed_depends_on_kinds": ["phantom"]}],
-        "capabilities": [], "decisions": [],
-    }
-    assert "E113" in codes(check_tbox_integrity(concepts))
-
-
-def test_tbox_missing_bool_property_is_error():
-    concepts = {"kinds": [{"name": "a", "allowed_depends_on_kinds": []}],
-                "capabilities": [], "decisions": []}
-    findings = check_tbox_integrity(concepts)
-    assert len([f for f in findings if f.code == "E113"]) == 4
-
-
-def test_capability_name_pattern_is_enforced():
-    concepts = {"capabilities": [{"name": "Patrol_Dispatch"}], "kinds": [], "decisions": []}
-    assert "E114" in codes(check_capability_names(concepts))
-
-
-def test_kind_without_term_is_warning():
-    findings = check_term_coverage(CONCEPTS, [{"term": "x", "covers": ["gateway"]}])
-    assert "W303" in codes(findings, level="warn")
-
-
-def test_kind_fully_covered_by_terms_has_no_warning():
-    terms = [{"term": f"t{i}", "covers": [k["name"]]} for i, k in enumerate(CONCEPTS["kinds"])]
-    assert check_term_coverage(CONCEPTS, terms) == []
 
 
 def test_duplicate_yaml_key_is_load_error(tmp_path: Path):

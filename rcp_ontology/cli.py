@@ -379,7 +379,7 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 
 def cmd_shacl(args: argparse.Namespace) -> int:
-    """L3 验证：对导出的 RDF 图跑 SHACL 约束，与 checks.py 的红线形成对照。"""
+    """L3 验证：对导出的 RDF 图跑 SHACL 约束（静态 + 动态 shapes）。"""
     contracts = Path(args.contracts).resolve()
     concepts_dir = Path(args.concepts).resolve() if args.concepts else None
     try:
@@ -389,21 +389,24 @@ def cmd_shacl(args: argparse.Namespace) -> int:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    from rcp_ontology.semweb import build_rdf, validate
+    from rcp_ontology.semweb import build_rdf, validate_all
 
     graph = build_rdf(registry, concepts)
     shapes = ONTOLOGY_ROOT / "ontology" / "constraints.ttl"
-    conforms, findings = validate(graph, shapes)
+    conforms, findings = validate_all(graph, shapes, concepts)
 
     if args.json:
         print(json.dumps({
             "conforms": conforms,
-            "findings": [{"path": f.path, "message": f.message} for f in findings],
+            "findings": [
+                {"code": f.code, "focus": f.focus, "message": f.message}
+                for f in findings
+            ],
         }, ensure_ascii=False, indent=2))
     else:
         print(f"SHACL 约束验证（{shapes.name}）：{'合规' if conforms else '不合规'}")
         for f in findings:
-            print(f"  - {f.path}: {f.message}")
+            print(f"  - {f.code}: {f.focus}: {f.message}")
     return 0 if conforms else 1
 
 

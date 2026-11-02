@@ -1,35 +1,82 @@
 @prefix rcp: <https://risk-control.platform/ontology#> .
 @prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-# SHACL 约束（shapes）。把"能表达为图形状约束"的红线翻译成 W3C 标准语言，
-# 与 checks.py 形成对照。文件扫描类红线（RL-004/005/007）不在 SHACL 能力内，
-# 仍由 checks.py 承担。
+# SHACL 约束（shapes）。分两类：
+#
+#   静态（本文件）：不随 kinds.yaml 内容变化的「固定结构约束」。
+#   动态（semweb/shapes.py）：白名单 / external 方向 / port、contract 是否必填，
+#       参数来自 kinds.yaml，随数据而变。
+#
+# 文件扫描类红线（RL-004/005/007）、跨源比对（RL-003）、键存在性（E001 其余字段）、
+# 唯一键（E002）、能力归属（E111/E112）、expected 形状（E115）、图连通性
+# （E108/E109/E110）不在 SHACL 能力内，仍由 checks.py 承担。边界见 README。
 
-# 服务必须有 port（对应 E001 必填字段的 port 部分）
-rcp:ServiceShape a sh:NodeShape ;
+# ---- E105：依赖必须指向已登记的服务（dependsOn 对象必须是 rcp:Service） ----
+rcp:RegisteredDependencyShape a sh:NodeShape ;
     sh:targetClass rcp:Service ;
     sh:property [
-        sh:path rcp:port ;
-        sh:minCount 1 ;
-        sh:message "服务必须有 port（E001）" ;
-    ] .
-
-# 巡查线不得依赖巡查线（对应 RL-001：巡查线之间不得互相调用）
-rcp:PatrolLineShape a sh:NodeShape ;
-    sh:targetClass rcp:PatrolLine ;
-    sh:property [
         sh:path rcp:dependsOn ;
-        sh:class rcp:PatrolLine ;
-        sh:maxCount 0 ;
-        sh:message "巡查线不得互相调用（RL-001）" ;
+        sh:class rcp:Service ;
+        sh:message "E105: 依赖了未登记的服务" ;
     ] .
 
-# 能力命名符合点分小写规范（对应 E114）
+# ---- E201：服务种类必须是已声明的 kind（rdf:type 里至少一个是 rcp:Kind 实例） ----
+# exporter 为每个已声明 kind 挂 rcp:Kind；未声明的 kind 类没有该类型，故 minCount 1
+# 能捕获「服务用了 TBox 里不存在的种类」。
+rcp:DeclaredKindShape a sh:NodeShape ;
+    sh:targetClass rcp:Service ;
+    sh:property [
+        sh:path rdf:type ;
+        sh:qualifiedValueShape [ sh:class rcp:Kind ] ;
+        sh:qualifiedMinCount 1 ;
+        sh:message "E201: 服务种类未在 TBox 声明" ;
+    ] .
+
+# ---- E202：能力必须已立名（hasCapability 对象必须是 rcp:Capability） ----
+rcp:DeclaredCapabilityShape a sh:NodeShape ;
+    sh:targetClass rcp:Service, rcp:Library ;
+    sh:property [
+        sh:path rcp:hasCapability ;
+        sh:class rcp:Capability ;
+        sh:message "E202: 使用了未立名的能力" ;
+    ] .
+
+# ---- E113：TBox 自洽 —— kind 的四个布尔属性必须显式写全（决定检查器行为） ----
+rcp:KindIntegrityShape a sh:NodeShape ;
+    sh:targetClass rcp:Kind ;
+    sh:property [
+        sh:path rcp:mustBeExternal ;
+        sh:minCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:message "E113: kind 缺布尔属性 must_be_external" ;
+    ] , [
+        sh:path rcp:isEntry ;
+        sh:minCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:message "E113: kind 缺布尔属性 is_entry" ;
+    ] , [
+        sh:path rcp:requiresPort ;
+        sh:minCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:message "E113: kind 缺布尔属性 requires_port" ;
+    ] , [
+        sh:path rcp:requiresContract ;
+        sh:minCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:message "E113: kind 缺布尔属性 requires_contract" ;
+    ] , [
+        sh:path rcp:allowsDependsOn ;
+        sh:class rcp:Kind ;
+        sh:message "E113: allowed_depends_on_kinds 引用了未声明的种类" ;
+    ] .
+
+# ---- E114：能力命名符合点分小写规范 ----
 rcp:CapabilityShape a sh:NodeShape ;
     sh:targetClass rcp:Capability ;
     sh:property [
         sh:path rcp:name ;
         sh:pattern "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9]*)+$" ;
-        sh:message "能力名不符合点分小写规范（E114）" ;
+        sh:message "E114: 能力名不符合点分小写规范" ;
     ] .
