@@ -12,6 +12,7 @@
 2. **决策语义只能改一处。** `concepts/decisions.yaml` 与 `rcp-contracts/contracts/schemas/decision.yaml`、`rcp-core` 的 `Decision` 必须同批改，三者不一致即 RL-003。
 3. **检查器只报机械事实。** 不新增"看起来是否合理"的启发式判断；分数、置信度这类不可复核的东西不进检查结论。
 4. **生成物不入库手改。** `SERVICES.md` 是渲染产物，改真源后重跑 render。
+5. **关系先立名再使用，且必须落在一张图上。** 新增关系只改 `ontology/relations.ttl`：给 `rcp:RelationKind` 加一条、显式写 `rcp:graph`、`rcp:status`，参与可达性才加 `rdfs:subPropertyOf rcp:dependsOn`。登记里出现未声明的关系名即 E116；关系不落在已声明的图上即 E118。**不要在 Python 里硬编码关系名**——`service_relations` 是唯一的规范化入口。
 
 ## 验证
 

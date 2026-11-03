@@ -1,0 +1,198 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# 关系层真源（手写 TTL）。
+#
+# 为什么这一层是 TTL 而不是 YAML：本文件声明的是「关于关系的断言」，不是关系实例。
+#   rdfs:subPropertyOf / owl:domain / 图的归属 / 端点种类约束 —— 这些无法从任何
+#   key: value 属性推导出来，只能显式写成语义三元组。关系实例（谁 calls 谁）仍在
+#   rcp-contracts/registry/services.yaml，那是可评审的事实。
+#
+# 六张分域图的意义：环检测与可达性只在 rcp:reachability true 的图上计算。把部署、
+# 数据血缘、构建依赖混进调用图，E108/E109/E110 会立刻误报——这是分域的唯一目的。
+#
+# 关系名即谓词 local name（rcp:calls → "calls"），不做大小写或连字符变换，
+# 保证 YAML 里写的关系名与 RDF 谓词一一对应，无需查表。
+
+# ---- 概念：关系与图 ----
+
+rcp:RelationKind  a owl:Class .
+rcp:RelationGraph a owl:Class .
+
+# ---- 六张图 ----
+
+rcp:CallGraph a rcp:RelationGraph ;
+    rcp:name "call" ;
+    rdfs:label "调用图" ;
+    rcp:reachability true ;
+    rdfs:comment "代码事实：服务发起同步调用或发布/订阅消息。参与可达性与影响面计算。" .
+
+rcp:DataGraph a rcp:RelationGraph ;
+    rcp:name "data" ;
+    rdfs:label "数据图" ;
+    rcp:reachability false ;
+    rdfs:comment "经 dataway 的读写与表级血缘。业务服务不得直连数据库，故不参与可达性。" .
+
+rcp:ContractGraph a rcp:RelationGraph ;
+    rcp:name "contract" ;
+    rdfs:label "契约图" ;
+    rcp:reachability false ;
+    rdfs:comment "服务与 OpenAPI/schema 的归属。RL-003 的载体，不参与可达性。" .
+
+rcp:BuildGraph a rcp:RelationGraph ;
+    rcp:name "build" ;
+    rdfs:label "构建图" ;
+    rcp:reachability false ;
+    rdfs:comment "编译期依赖与版本基线对齐。基座被所有服务依赖，套进可达性会得出全连通。" .
+
+rcp:DeployGraph a rcp:RelationGraph ;
+    rcp:name "deploy" ;
+    rdfs:label "部署图" ;
+    rcp:reachability false ;
+    rdfs:comment "workload、共置与网关路由。路由是配置事实，与代码调用不是同一条边。" .
+
+rcp:GovernanceGraph a rcp:RelationGraph ;
+    rcp:name "governance" ;
+    rdfs:label "治理图" ;
+    rcp:reachability false ;
+    rdfs:comment "归属、红线约束与例外声明。who 的问题，不是 can-reach 的问题。" .
+
+# ---- 调用图：唯一参与可达性的图 ----
+# 这几条一律 rdfs:subPropertyOf rcp:dependsOn：导出器会为它们同时产出 dependsOn
+# 汇总边，使 dependsOn+ 的推理与 SPARQL 路径闭包保持不变（见 exporter 说明）。
+
+rcp:calls a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "calls" ;
+    rcp:graph rcp:CallGraph ;
+    rcp:status "enforced" ;
+    rdfs:subPropertyOf rcp:dependsOn ;
+    rdfs:domain rcp:Service ;
+    rcp:targetKind rcp:Service ;
+    rdfs:comment "同步 HTTP 调用（代码事实）。旧的 depends_on 字段等价于本关系。" .
+
+rcp:publishes a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "publishes" ;
+    rcp:graph rcp:CallGraph ;
+    rcp:status "declared" ;
+    rdfs:subPropertyOf rcp:dependsOn ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "发布事件或消息。异步依赖同样构成级联故障风险，故进调用图。" .
+
+rcp:subscribes a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "subscribes" ;
+    rcp:graph rcp:CallGraph ;
+    rcp:status "declared" ;
+    rdfs:subPropertyOf rcp:dependsOn ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "订阅事件或消息。方向是消费方 → 生产方，与 publishes 反向。" .
+
+# ---- 数据图 ----
+
+rcp:queries a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "queries" ;
+    rcp:graph rcp:DataGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rcp:targetKind rcp:Service ;
+    rdfs:comment "经 dataway 的声明式查询。目标应为数据网关（已登记服务），而不是具体业务服务。" .
+
+rcp:writes a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "writes" ;
+    rcp:graph rcp:DataGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rcp:targetKind rcp:Service ;
+    rdfs:comment "经 dataway 的模板化写入。直连数据库由 RL-005 另行判定。" .
+
+rcp:reads_table a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "reads_table" ;
+    rcp:graph rcp:DataGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "表级血缘：读哪张表。目标是词汇对象不是登记实体，故不设 targetKind。" .
+
+rcp:writes_table a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "writes_table" ;
+    rcp:graph rcp:DataGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "表级血缘：写哪张表。改表结构前据此反查影响面。" .
+
+rcp:migrates a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "migrates" ;
+    rcp:graph rcp:DataGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "执行某仓的版本化 DDL。RL-004 的落位判据，执行者唯一。" .
+
+# ---- 契约图 ----
+
+rcp:exposes a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "exposes" ;
+    rcp:graph rcp:ContractGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "对外暴露某份 OpenAPI 契约。等价于登记里的 contracts 字段。" .
+
+rcp:consumes a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "consumes" ;
+    rcp:graph rcp:ContractGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "消费别人的契约（生成的 client）。与 calls 不同：这是编译期耦合。" .
+
+# ---- 构建图 ----
+
+rcp:depends_artifact a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "depends_artifact" ;
+    rcp:graph rcp:BuildGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "Maven 坐标依赖（如 rcp-core）。抬版本要波及全图，但不构成运行时可达性。" .
+
+rcp:aligns_stack a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "aligns_stack" ;
+    rcp:graph rcp:BuildGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "对齐 baseline_stack 的版本基线。偏离即构建期风险。" .
+
+# ---- 部署图 ----
+
+rcp:deployed_as a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "deployed_as" ;
+    rcp:graph rcp:DeployGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "服务对应的 K8s workload 名。清单与登记的对应关系。" .
+
+rcp:routes_to a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "routes_to" ;
+    rcp:graph rcp:DeployGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "网关路由到某服务。配置事实：有路由不等于有人调用，故不进影响面。" .
+
+# ---- 治理图 ----
+
+rcp:owned_by a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "owned_by" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "归属团队。CODEOWNERS 的派生来源。" .
+
+rcp:governed_by a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "governed_by" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "受哪条红线约束。用于反查「改这条红线会放开哪些服务」。" .
+
+rcp:waived_by a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "waived_by" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rdfs:comment "例外声明（expected / RL-007 例外）。必须带 reason、owner、review_by。" .
