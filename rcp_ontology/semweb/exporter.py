@@ -1,8 +1,8 @@
-"""L1 导出层：把 YAML 声明（registry + concepts）单向翻译成 RDF 图。
+"""L1 导出：把声明图合成一张可查询的 RDF 图。
 
-这是语义网层的入口。ABox（services/libraries）与 TBox（kinds/capabilities/decisions）
-被转成 RDF 三元组。方向是单向导出——YAML 仍是"事实真源"，RDF 是它的图形态，
-不反向写回 YAML。关系类型与公理的真源是 ontology/relations.ttl（手写 TTL）。
+ABox（``registry/services.ttl``）与 TBox（``concepts/tbox.ttl``）本来就是图，导出器
+不做格式翻译，只做两件事：把关系实例物化成 ``dependsOn`` 汇总边、把两仓的图并成一张。
+只有手工构造字典视图的调用方（测试、外部集成）才会走"字典 → 三元组"的合成路径。
 
 三元组形态：
     rcp:content-patrol  rdf:type          rcp:PatrolLine ;
@@ -166,9 +166,12 @@ def build_rdf(
 ) -> Graph:
     """把登记与概念声明翻译成 RDF 图。
 
-    不加载 ontology/rcp.ttl 的本体公理——那由 reasoner 在需要推理时合并。
-    这里只产出"实例层"事实，加上关系类型的 TBox 摘要（relations 给出时）；
-    类与属性定义在 ontology/rcp.ttl 与 ontology/relations.ttl。
+    TBox 自带原图（``concepts["tbox_graph"]``，来自 ``concepts/tbox.ttl``）时直接并入，
+    不再从字典反向合成种类/能力/决策三元组——同一事实只允许有一条产出路径，否则
+    字典与图之间会多出一个可漂移的翻译器。只有手工构造字典的调用方（测试、外部集成）
+    才走合成路径。
+
+    不加载 ontology/constraints.ttl 的 shapes——那是校验，不是事实。
     """
     g = Graph()
     g.bind("rcp", RCP)
@@ -187,6 +190,12 @@ def build_rdf(
         name = library.get("name")
         if name:
             _library_node(g, str(name), library)
+
+    tbox = concepts.get("tbox_graph")
+    if tbox is not None:
+        for triple in tbox:
+            g.add(triple)
+        return g
 
     for kind in concepts.get("kinds", []):
         _kind_node(g, kind)

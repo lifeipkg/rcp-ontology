@@ -25,6 +25,7 @@ from rcp_ontology.semweb import (
 )
 
 ONTOLOGY_DIR = Path(__file__).resolve().parent.parent / "ontology"
+CONCEPTS_DIR = Path(__file__).resolve().parent.parent / "concepts"
 
 CONCEPTS = {
     "kinds": [
@@ -75,7 +76,8 @@ def _transitive_chain():
 
 def _data_graph(registry, concepts):
     g = build_rdf(registry, concepts)
-    g.parse(ONTOLOGY_DIR / "rcp.ttl", format="turtle")
+    # TBox 原图提供 dependsOn 的 owl:TransitiveProperty 声明；重复并入是幂等的。
+    g.parse(CONCEPTS_DIR / "tbox.ttl", format="turtle")
     return g
 
 

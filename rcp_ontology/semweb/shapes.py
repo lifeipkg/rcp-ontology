@@ -1,10 +1,10 @@
-"""L3 动态 shapes：把 TBox（kinds.yaml）里的「数据驱动约束」编译成 SHACL shapes。
+"""L3 动态 shapes：把 TBox（concepts/tbox.ttl）里的「数据驱动约束」编译成 SHACL shapes。
 
 静态的「固定结构约束」（E105 依赖未登记、E201 种类未声明、E202 能力未声明、
 E113 布尔属性与引用悬空、E114 命名）写在 ontology/constraints.ttl，因为它们不随
-kinds.yaml 的内容变化。而本模块生成的四类约束，其参数（白名单、external 方向、
-port/contract 是否必填）都来自 kinds.yaml 的每个 kind，属于「规则即数据」——
-kinds.yaml 改了，shapes 随之变，无需改本文件。
+TBox 的内容变化。而本模块生成的四类约束，其参数（白名单、external 方向、
+port/contract 是否必填）都来自 TBox 的每个 kind，属于「规则即数据」——
+TBox 改了，shapes 随之变，无需改本文件。
 
 生成的四类 shapes（每个 kind 一个 NodeShape，targetClass 到该 kind 的 OWL 类）：
 
@@ -162,7 +162,7 @@ def _add_contract_shapes(g: Graph, concepts: dict[str, Any]) -> None:
 
 
 def build_shapes_graph(concepts: dict[str, Any]) -> Graph:
-    """把 concepts（kinds.yaml）编译成数据驱动的 SHACL shapes 图。"""
+    """把 concepts（TBox 字典视图）编译成数据驱动的 SHACL shapes 图。"""
     g = Graph()
     g.bind("sh", SH)
     g.bind("rcp", RCP)

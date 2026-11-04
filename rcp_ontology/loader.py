@@ -1,16 +1,22 @@
 """本体仓：概念装载与结果类型。
 
-TBox（概念/种类/能力/决策语义）在 concepts/，ABox（具体服务实例）在契约仓
+TBox（概念/种类/能力/决策语义）在 ``concepts/tbox.ttl``，ABox（具体服务实例）在契约仓
 ``registry/services.ttl``。本包只读，不写任何声明文件。
+
+两支都是 TTL，所以"声明 → 图"不再有翻译步骤；这里仍提供字典视图，是因为检查逻辑
+（必填字段、图算法、渲染）建立在"实体 → 属性"上，改判会放大风险。视图在内存里生成，
+没有对应磁盘文件，不构成第二份真源。
 
 两种序列化各用各的严格性：
 
-- YAML：重复键视为解析失败，而不是静默取后者。多人同时编辑同一份声明时，重复键
-  会让"文件里写了什么"与"程序读到什么"不一致，这类错误必须显式失败。
-- TTL：RDF 允许多值，所以功能属性（port/repo/owner/external/health）的多值由
-  ``registry_ttl`` 在装载期报错——这是同一条护栏在另一种格式上的等价实现。
+- YAML（只剩 platform.yaml / redlines.yaml 这类非图配置）：重复键视为解析失败，而不是
+  静默取后者。多人同时编辑同一份声明时，重复键会让"文件里写了什么"与"程序读到什么"
+  不一致，这类错误必须显式失败。
+- TTL：RDF 允许多值，所以功能属性（port/repo/owner/external/health、kind 的四个布尔、
+  决策分值、能力归属）的多值由 ``registry_ttl`` / ``concepts_ttl`` 在装载期报错——
+  这是同一条护栏在另一种格式上的等价实现。
 
-``services.yaml`` 仍可读（兼容回退），但新仓与新改动一律写 TTL。
+``services.yaml`` 仍可读（兼容回退），``concepts/*.yaml`` 已随 TBox 迁移删除。
 """
 
 from __future__ import annotations
@@ -131,16 +137,23 @@ def load_registry(contracts_root: Path) -> dict[str, Any]:
     return data
 
 
-def load_concepts(concepts_dir: Path) -> dict[str, list[dict[str, Any]]]:
-    """读 TBox 三份概念文件。"""
-    kinds = read_yaml(concepts_dir / "kinds.yaml") or {}
-    caps = read_yaml(concepts_dir / "capabilities.yaml") or {}
-    decisions = read_yaml(concepts_dir / "decisions.yaml") or {}
-    return {
-        "kinds": kinds.get("concepts", []),
-        "capabilities": caps.get("concepts", []),
-        "decisions": decisions.get("enum", []),
-    }
+def load_concepts(concepts_dir: Path) -> dict[str, Any]:
+    """读 TBox（``concepts/tbox.ttl``）。
+
+    返回的字典是内存视图：除三个列表外还带 ``tbox_graph``（原图），供导出与 SHACL
+    验证直接使用，避免再从字典反向合成一遍相同的三元组。
+    """
+    from .concepts_ttl import TBOX_FILE, ConceptsTTLError, parse_concepts
+
+    path = concepts_dir / TBOX_FILE
+    if not path.is_file():
+        raise LoadError(f"TBox 文件不存在: {path}")
+    try:
+        data, graph = parse_concepts(path)
+    except ConceptsTTLError as exc:
+        raise LoadError(str(exc)) from exc
+    data["tbox_graph"] = graph
+    return data
 
 
 def load_redlines(contracts_root: Path) -> dict[str, Any]:
@@ -151,15 +164,6 @@ def load_redlines(contracts_root: Path) -> dict[str, Any]:
     data.setdefault("constraints", [])
     data.setdefault("exceptions", [])
     return data
-
-
-def load_terms(contracts_root: Path) -> list[dict[str, Any]]:
-    """读平台立名词汇表。缺文件不算错——词汇表是可选声明。"""
-    path = contracts_root / "vocabulary" / "terms.yaml"
-    if not path.is_file():
-        return []
-    data = read_yaml(path) or {}
-    return list(data.get("terms", []))
 
 
 def load_decision_schema(contracts_root: Path, field: str = "enum") -> list[str]:
