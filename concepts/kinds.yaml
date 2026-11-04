@@ -1,5 +1,5 @@
 schema: rcp.concepts/v1
-# TBox：服务种类（kind）概念定义。ABox 实例在 rcp-contracts/registry/services.yaml，
+# TBox：服务种类（kind）概念定义。ABox 实例在 rcp-contracts/registry/services.ttl，
 # 本文件只管"有哪些种类、各自的语义与约束"，不含具体服务。
 #
 # 属性口径（检查器按这些属性判，不在代码里硬编码种类名）：
