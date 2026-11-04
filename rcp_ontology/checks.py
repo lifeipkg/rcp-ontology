@@ -13,7 +13,7 @@
 - ``S0xx``    本次检查被跳过的说明，不计入失败
 
 种类相关的判断一律从 TBox 属性取值（requires_port / requires_contract / is_entry），
-不在代码里硬编码种类名。新增种类只需改 concepts/kinds.yaml。
+不在代码里硬编码种类名。新增种类只需改 concepts/tbox.ttl。
 """
 
 from __future__ import annotations
@@ -272,6 +272,30 @@ def check_rule_specs(redlines: dict[str, Any]) -> list[Finding]:
                         f"{redline_id} 的 match 正则无法编译: {exc}",
                     )
                 )
+    return findings
+
+
+CAPABILITY_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$")
+
+
+def check_capability_naming(concepts: dict[str, list[dict[str, Any]]]) -> list[Finding]:
+    """E114 能力名必须点分小写（如 patrol.dispatch，而非 Patrol_Dispatch）。
+
+    为什么在 Python 轨而不在 SHACL：TBox 迁到 TTL 后，能力名就是实例 IRI 的
+    local name，不再有 rcp:name 字面值可挂 sh:pattern。留在 SHACL 里的结果是一个
+    永远不命中的空形状——"看起来在检查"比"没有检查"更危险，所以随迁移移到这一轨。
+    """
+    findings: list[Finding] = []
+    for concept in concepts["capabilities"]:
+        name = str(concept.get("name") or "")
+        if not CAPABILITY_NAME_RE.match(name):
+            findings.append(
+                Finding(
+                    "error",
+                    "E114",
+                    f"能力名 {name!r} 不符合点分小写规范（例：patrol.dispatch）",
+                )
+            )
     return findings
 
 
@@ -664,9 +688,10 @@ def check_shacl(
 
     覆盖从 Python 迁移到声明式约束的检查：E105 依赖未登记、E106/RL-001 依赖
     白名单、RL-002 external 方向、E201 种类声明、E202 能力立名、E113 TBox 自洽、
-    E114 命名、RL-006 挂契约、E117 关系端点越界。这些全部是「值/关系约束」，
-    在 RDF 图上无损表达；键存在性、跨源比对、文件扫描等不在 SHACL 能力内，
-    仍由本文件其它函数承担。
+    挂契约（RL-006 的 minCount 部分）、E117 关系端点越界。这些全部是「值/关系约束」，
+    在 RDF 图上无损表达；键存在性、命名规范（E114，TBox 迁 TTL 后能力名即 IRI
+    local name，图上没有可挂 pattern 的字面值）、跨源比对、文件扫描等不在 SHACL
+    能力内，仍由本文件其它函数承担。
     """
     from rcp_ontology.semweb import build_rdf, validate_all
 
@@ -690,10 +715,10 @@ def check_declarations(
 
     两轨分工：
       - checks.py 保留：键存在性（E001）、唯一键（E002）、跨源比对（RL-003）、
-        契约文件存在（RL-006）、能力归属（E111/E112）、expected 形状（E115）、
-        图连通性（E108/E109/E110/W306）、红线元检查（E301/E302）。
+        契约文件存在（RL-006）、能力命名（E114）、能力归属（E111/E112）、
+        expected 形状（E115）、图连通性（E108/E109/E110/W306）、红线元检查（E301/E302）。
       - SHACL 迁移：依赖登记（E105）、依赖白名单（E106/RL-001）、external 方向
-        （RL-002）、种类/能力声明（E201/E202）、TBox 自洽（E113）、命名（E114）、
+        （RL-002）、种类/能力声明（E201/E202）、TBox 自洽（E113）、
         挂契约（RL-006 的 minCount 部分）。
     """
     concepts_dir = concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
@@ -709,6 +734,7 @@ def check_declarations(
     findings += check_expected_state(registry)
     findings += check_decision_alignment(contracts_root, concepts, _spec_by_id(redlines, "RL-003"))
     findings += check_contracts_exist(contracts_root, registry, concepts)
+    findings += check_capability_naming(concepts)
     findings += check_capability_ownership(registry, concepts)
     findings += check_dependency_graph(registry, concepts, relations)
     findings += check_shacl(registry, concepts, relations)

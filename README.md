@@ -10,7 +10,7 @@
 
 ## 什么是 TBox、什么是 ABox（本仓口径）
 
-- **TBox（本仓 `concepts/`）**：种类（gateway / patrol-line / data-gateway / db-ops / frontend / meta）、能力立名、决策等级语义。不带具体服务名。
+- **TBox（本仓 `concepts/tbox.ttl`）**：种类（gateway / patrol-line / data-gateway / db-ops / frontend / meta）、能力立名、决策等级语义。不带具体服务名。种类既是 `owl:Class`（登记里用 `rdf:type` 归类），又是 `rcp:Kind` 实例（承载五个行为属性）。
 - **ABox（契约仓 `registry/services.ttl`）**：具体服务实例、端口、关系边、owner。实例 IRI 即服务名，种类即 `rdf:type`。
 - 契约层（`rcp-contracts/contracts/`）：界面与结构的机器可读形态。
 
@@ -24,20 +24,23 @@
 | 层 | 内容 | 真源 | 为什么是这个格式 |
 |---|---|---|---|
 | 概念实例（ABox） | 服务、库、端口、owner、能力、边实例 | `rcp-contracts/registry/services.ttl` | 实例与边最终要进推理机；写成三元组后不再有"声明 → 图"的翻译步骤，也就没有翻译器与声明不一致这一类错误 |
-| 概念声明（TBox） | kind 及其五个行为属性、能力立名、决策语义 | `concepts/*.yaml` | 规则即数据：改声明即改判定，不需改代码 |
+| 概念声明（TBox） | kind 及其五个行为属性、能力立名、决策语义 | `concepts/tbox.ttl` | kind 是类、能力与决策是个体，与登记共享同一命名空间；同图之后类声明、`sh:targetClass`、能力归属不再靠字符串对齐 |
 | 关系与公理 | 有哪些关系、属于哪张图、是否参与可达性、端点种类 | `ontology/relations.ttl` | `rdfs:subPropertyOf` / `owl:domain` 这类断言无法从 key: value 推导，只能写成三元组 |
 | 结构约束 | SHACL shapes（静态） | `ontology/constraints.ttl` | 表达性约束（`sh:qualifiedValueShape`、`sh:or`），无法从属性机械生成 |
 
 判据一句话：**参与推理的进 TTL，纯配置的留 `key: value`。**
 
-- 进 TTL：实例、边、种类、关系公理——它们是图上的东西，推理机读的就是图。
-- 留 YAML：`registry/platform.yaml` 的版本钉与服务发现、`concepts/*.yaml` 的 kind 行为属性、
-  `redlines.yaml` 的策略规格。它们没有图语义，写成三元组只会把"17"变成字面量，
-  连 `grep` 都失去。
+- 进 TTL：实例、边、种类、能力、决策、关系公理——它们是图上的东西，推理机读的就是图。
+- 留 YAML：`registry/platform.yaml` 的版本钉与服务发现、`redlines.yaml` 的策略规格。
+  它们没有图语义，写成三元组只会把"17"变成字面量，连 `grep` 都失去。
 
 换格式的代价要明说：RDF 允许一个属性多值，原 YAML 的"重复键即失败"不再自动成立。
-所以装载器显式判功能属性（`port`/`repo`/`owner`/`external`/`health`）多值并报错——
-这是一条必须在换格式时补上的护栏，不补就等于静默接受 `port 8080, 9090`。
+所以两支装载器都显式判功能属性多值并报错——`registry_ttl` 管
+`port`/`repo`/`owner`/`external`/`health`，`concepts_ttl` 管 kind 的四个布尔、
+决策分值与能力归属。不补这条护栏就等于静默接受 `port 8080, 9090`。
+
+TBox 与 ABox 都有"字典视图"（`concepts_ttl` / `registry_ttl`）：检查逻辑仍跑在
+"实体 → 属性"上，但视图在内存中生成、没有对应磁盘文件，因此不构成第二份真源。
 
 ## 关系层：分域图（`ontology/relations.ttl`）
 
@@ -81,7 +84,7 @@ rcp:streams_to a rcp:RelationKind, owl:ObjectProperty ;
 **真源里不写汇总边**——写进去等于把推导结论当事实，还会与 `relations.ttl` 的公理重复。
 
 
-**种类的行为全部由 TBox 属性决定，不在代码里硬编码种类名。** 新增种类只改 `concepts/kinds.yaml`：
+**种类的行为全部由 TBox 属性决定，不在代码里硬编码种类名。** 新增种类只改 `concepts/tbox.ttl`：
 
 | 属性 | 作用 |
 |---|---|
@@ -137,7 +140,7 @@ python -m pytest -q
 
 - **SHACL（声明式约束）**：可表达为「值/关系约束」的检查——依赖登记、依赖白名单、external
   方向、种类/能力声明、TBox 自洽、命名规范、port/contract 必填。约束来自 `ontology/constraints.ttl`
-  （静态）+ `shapes.py` 从 `kinds.yaml` 编译（动态，规则即数据）。
+  （静态）+ `shapes.py` 从 `concepts/tbox.ttl` 编译（动态，规则即数据）。
 - **Python（过程式检查）**：SHACL 表达不了的——键存在性、唯一键、跨源比对、契约文件存在、
   能力归属、图连通性、expected 形状、红线元检查、工作区布局（DDL/JDBC/上游地址扫描）。
 
@@ -163,7 +166,7 @@ python -m pytest -q
 | E111 | 能力的 owner 未在 services/libraries 登记 | Python | error |
 | E112 | 能力的 owner 并未声明持有该能力（归属与实现不符） | Python | error |
 | E113 | TBox 内部悬空：`allowed_depends_on_kinds` 引用未声明种类，或缺显式布尔属性 | SHACL | error |
-| E114 | 能力名不符合点分小写规范（如 `Patrol_Dispatch`） | SHACL | error |
+| E114 | 能力名不符合点分小写规范（如 `Patrol_Dispatch`） | Python | error |
 | E115 | 服务 `expected` 预期状态声明不合法（非映射 / 未知字段 / 标志非布尔 / 缺 reason/owner/review_by / review_by 非日期） | Python | error |
 | W306 | `expected` 声明与事实不符（声明无依赖但已有依赖方 / 声明不可达但已可达），提示移除过时声明 | Python | warn |
 
@@ -199,7 +202,7 @@ python -m pytest -q
 | 编号 | 原判据 | 移除原因 |
 |---|---|---|
 | W301 | capability 立名但无服务使用 | 契约仓即真源，能力立名即「被引用」，无「立名而未用」场景 |
-| W303 | 种类未在 `terms.yaml` 立名 | 术语立名与结构约束职责重叠，`kinds.yaml` 已唯一承载种类定义 |
+| W303 | 种类未在 `terms.yaml` 立名 | 术语立名与结构约束职责重叠，`concepts/tbox.ttl` 已唯一承载种类定义 |
 | W304 | 能力除 owner 外还有别的实现者 | 单 owner 契约模型下不存在多实现，弱提示无裁决价值 |
 
 ## 三条设计约定
@@ -230,11 +233,13 @@ TTL 没有"重复键"这回事（RDF 天然多值），所以在装载期显式�
 ## 语义网层（RDF / OWL / SHACL / SPARQL）
 
 本仓的约束校验分两轨执行：**值/关系约束由 SHACL（声明式）承担，过程式检查由 Python 承担**。
-同一份登记（registry）与概念（concepts）先导出为 RDF 图，再交给 SHACL 验证 + OWL 推理 +
-SPARQL 查询处理。**YAML 仍是真源**，RDF 是它的图形态。
+登记（registry）与概念（concepts）本身就是图，导出器只把两仓的图并成一张、并物化可达性汇总边，
+再交给 SHACL 验证 + OWL 推理 + SPARQL 查询处理。**TTL 是真源**，字典视图是内存里的检查用视图。
 
-- SHACL 是依赖登记、依赖白名单、种类/能力声明、命名规范、port/contract 必填等约束的**唯一实现**
-  （已从 `checks.py` 迁移过来），不再是「对照」而是「本尊」。
+- SHACL 是依赖登记、依赖白名单、种类/能力声明、port/contract 必填等约束的**唯一实现**
+  （已从 `checks.py` 迁移过来），不再是「对照」而是「本尊」。命名规范（E114）是例外：
+  TBox 迁 TTL 后能力名即 IRI local name，图上没有字面值可挂 `sh:pattern`，故留在 Python 轨，
+  空的形状比没有形状更危险。
 - OWL 与 SPARQL 仍与 `graph.py` 的 BFS 构成交叉验证：依赖闭包有且只有一个正确答案，三种范式算出的
   闭包必须一致。
 
@@ -242,9 +247,9 @@ SPARQL 查询处理。**YAML 仍是真源**，RDF 是它的图形态。
 
 | 技术 | 回答的问题 | 本仓对应 | 命令 |
 |---|---|---|---|
-| RDF | 事实如何描述 | `rcp_ontology/semweb/exporter.py`：YAML → 三元组 | `cli.py export` |
-| OWL | 从已知推未知 | `ontology/rcp.ttl`（类与传递属性）+ `ontology/relations.ttl`（关系公理）+ `reasoner.py` | 测试交叉验证 |
-| SHACL | 哪里违规 | `ontology/constraints.ttl`（静态）+ `shapes.py`（动态，从 `kinds.yaml` 编译）+ `validator.py` | `cli.py shacl` |
+| RDF | 事实如何描述 | `rcp_ontology/semweb/exporter.py`：两仓 TTL 并图 + 汇总边物化 | `cli.py export` |
+| OWL | 从已知推未知 | `concepts/tbox.ttl`（类与传递属性）+ `ontology/relations.ttl`（关系公理）+ `reasoner.py` | 测试交叉验证 |
+| SHACL | 哪里违规 | `ontology/constraints.ttl`（静态）+ `shapes.py`（动态，从 `concepts/tbox.ttl` 编译）+ `validator.py` | `cli.py shacl` |
 | SPARQL | 如何提问 | `query.py`：属性路径 `dependsOn+` | `cli.py sparql` |
 
 ### 交叉验证：三种范式同一结论

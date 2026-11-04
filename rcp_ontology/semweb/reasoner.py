@@ -1,6 +1,6 @@
 """L2 OWL 推理：对 RDF 图做 OWL-RL 闭包，物化传递依赖。
 
-ontology/rcp.ttl 声明 rcp:dependsOn 为 owl:TransitiveProperty。owlrl 的 OWL-RL
+concepts/tbox.ttl 声明 rcp:dependsOn 为 owl:TransitiveProperty。owlrl 的 OWL-RL
 推理会把间接依赖物化成显式三元组（A→B、B→C 推出 A→C），等价于 graph.py 手写的
 BFS 闭包。两者在测试里交叉验证，保证"推理机算的"与"手写算法算的"一致。
 

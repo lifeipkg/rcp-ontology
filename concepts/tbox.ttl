@@ -1,0 +1,255 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# TBox 真源（手写 TTL）。本文件是平台概念的**唯一编辑面**：
+#   1. 种类（kind）：既是 owl:Class（登记里用 rdf:type 归类），又是 rcp:Kind 实例
+#      （承载 mustBeExternal / isEntry / requiresPort / requiresContract /
+#      allowsDependsOn 五个行为属性，检查器按这些属性判，不硬编码种类名）；
+#   2. 能力（capability）立名与归属（rcp:owner 指向实现它的服务或库）；
+#   3. 决策等级（decision）的码、分值、中文名与语义（RL-003 与契约层逐字比对）。
+#
+# 为什么这三样在同一个文件、且都是 TTL：
+#   - kind 是类，能力与决策是个体，三者共享 rcp 命名空间，最终合成同一张图。
+#     分三个 YAML 再翻译一遍，等于给每个事实制造一个"文件形态"和一个"图形",
+#     而翻译器本身就是一个会出错的中间层。
+#   - 实例在 rcp-contracts/registry/services.ttl，用的是同一套类 IRI。类与实例分处
+#     两仓但同图，这是"分层"而不是"重复"。
+#
+# 刻意不写在这里的东西（它们没有图语义）：
+#   - registry/platform.yaml 的版本钉与服务发现（写进图只会把 "17" 变成字面量，
+#     连 grep 都失去）；
+#   - ontology/constraints/redlines.yaml 的策略规格（正则、glob、消息模板）。
+#
+# 三条书写约定：
+#   1. 条目标识即 IRI local name，不另写 rcp:name —— 同一事实只有一个位置。
+#      kind 名由类名转 kebab（PatrolLine → patrol-line），与登记里的 kind 字面值一致。
+#   2. 五个行为属性必须显式写全，缺一个即 E113（检查器行为不允许靠默认值退化）。
+#   3. 功能属性（四个布尔、baseScore、owner）只允许一个值，装载器显式判多值。
+
+# ---- 基础类 ----
+
+rcp:Service     a owl:Class .
+rcp:Library     a owl:Class .
+rcp:Kind        a owl:Class .
+rcp:Capability  a owl:Class .
+rcp:Decision    a owl:Class .
+rcp:Platform    a owl:Class .
+
+# ---- 属性：对象属性 ----
+
+# dependsOn 是可达性汇总边，由导出器从具体的调用类关系物化（calls/publishes/subscribes
+# 均 rdfs:subPropertyOf 本属性，见 relations.ttl）。声明为传递属性，是为了让推理机
+# 不必先跑一遍子属性推演就能得到闭包。
+rcp:dependsOn     a owl:ObjectProperty, owl:TransitiveProperty ;
+                  rdfs:domain rcp:Service ;
+                  rdfs:range  rcp:Service .
+
+rcp:hasCapability a owl:ObjectProperty ;
+                  rdfs:domain rcp:Service ;
+                  rdfs:range  rcp:Capability .
+
+# 能力归属：目标是实现该能力的服务或库的实例 IRI，不是字符串，便于反向查询。
+# 与 rcp:owner（服务→负责团队的字符串）是两个轴：owner 回答"谁负责"，本属性回答
+# "谁实现"。混成一个字段会让 E112（归属与实现不符）失去判据。
+rcp:implementedBy a owl:ObjectProperty ;
+                  rdfs:domain rcp:Capability .
+
+# 种类白名单：目标必须是已声明的 kind（E113 判据）。
+rcp:allowsDependsOn a owl:ObjectProperty ;
+                  rdfs:domain rcp:Kind ;
+                  rdfs:range  rcp:Kind .
+
+# ---- 属性：数据类型属性 ----
+
+rcp:port          a owl:DatatypeProperty ; rdfs:range xsd:integer .
+rcp:external      a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:repo          a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:owner         a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:artifact      a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:name          a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:health        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:contract      a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:definition    a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:meaning       a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:baseScore     a owl:DatatypeProperty ; rdfs:range xsd:integer .
+
+# 种类行为属性：检查器判定的全部依据（见 README 的属性表）。
+rcp:mustBeExternal   a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:isEntry          a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:requiresPort     a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:requiresContract a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+
+# ── 种类 ────────────────────────────────────────────────────────────────
+# 五个行为属性的口径：
+#   mustBeExternal   是否必须 external=true（RL-002）
+#   isEntry          是否为图上入口，允许入度为 0（E109）
+#   requiresPort     是否必须有 port（E001；元仓为 false）
+#   requiresContract 是否必须挂 OpenAPI（RL-006；前端与元仓为 false）
+#   allowsDependsOn  允许依赖的种类白名单，不写 = 零依赖（E106 / RL-001）
+
+rcp:Gateway a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "网关" ;
+    rcp:definition "平台对外唯一 HTTP 入口，负责幂等、路由、分级处置与降级。" ;
+    rcp:mustBeExternal true ;
+    rcp:isEntry true ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true ;
+    rcp:allowsDependsOn rcp:PatrolLine, rcp:DataGateway, rcp:DbOps .
+
+rcp:PatrolLine a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "巡查线" ;
+    rcp:definition "按业务域切分的风控判定单元，必须可独立部署、独立降级。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry false ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true .
+
+rcp:DataGateway a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "数据网关" ;
+    rcp:definition "业务服务访问数据库的唯一出口，只接受声明式查询与模板化写入。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry false ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true .
+
+rcp:DbOps a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "数据库操作服务" ;
+    rcp:definition "版本化 DDL 的唯一执行者，负责迁移执行、台账与回滚。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry false ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true .
+
+rcp:Frontend a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "前端" ;
+    rcp:definition "运营控制台，只经 api-gateway 访问后端，不得直连任何裸服务。" ;
+    rcp:mustBeExternal true ;
+    rcp:isEntry true ;
+    rcp:requiresPort true ;
+    rcp:requiresContract false ;
+    rcp:allowsDependsOn rcp:Gateway .
+
+# 元仓不是服务：不挂 rdfs:subClassOf rcp:Service，登记里也不写 rcp:Service 类型，
+# 否则 port 必填的形状会误报它缺端口。
+rcp:Meta a owl:Class, rcp:Kind ;
+    rdfs:label "元仓" ;
+    rcp:definition "不参与运行时数据面的元仓：契约声明、本体检查工具、迁移与部署清单。无 HTTP 端口、不部署为服务、不挂 OpenAPI 契约，但必须有 owner 与登记。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry true ;
+    rcp:requiresPort false ;
+    rcp:requiresContract false .
+
+# ── 能力 ────────────────────────────────────────────────────────────────
+# 服务登记里出现的 capability 必须在此立名（E202）；owner 必须是真正持有它的
+# 服务或库（E111/E112），否则审批与责任会落在不实现该能力的人身上。
+
+rcp:patrol.dispatch a rcp:Capability ;
+    rdfs:label "巡查派发" ;
+    rcp:definition "受理统一巡查事件并按 domain 路由到对应巡查线。" ;
+    rcp:implementedBy rcp:api-gateway .
+
+rcp:patrol.domains a rcp:Capability ;
+    rdfs:label "巡查线自描述" ;
+    rcp:definition "返回平台当前支持的巡查线清单。" ;
+    rcp:implementedBy rcp:api-gateway .
+
+rcp:patrol.content.dedup a rcp:Capability ;
+    rdfs:label "内容判重" ;
+    rcp:definition "岗位文案近重复检测（SimHash + 3-gram + 分段索引）。" ;
+    rcp:implementedBy rcp:content-patrol .
+
+rcp:patrol.message.ac a rcp:Capability ;
+    rdfs:label "消息命中" ;
+    rcp:definition "会话文本敏感词与变体命中（AC 自动机 + 角色分级）。" ;
+    rcp:implementedBy rcp:message-patrol .
+
+rcp:patrol.account.rule a rcp:Capability ;
+    rdfs:label "账号规则" ;
+    rcp:definition "接码、养号等账号侧风险规则判定。" ;
+    rcp:implementedBy rcp:account-patrol .
+
+rcp:patrol.fund.rule a rcp:Capability ;
+    rdfs:label "资金规则" ;
+    rcp:definition "补贴薅取等资金侧风险规则判定。" ;
+    rcp:implementedBy rcp:fund-patrol .
+
+rcp:data.query a rcp:Capability ;
+    rdfs:label "声明式查询" ;
+    rcp:definition "只读查询，限 SELECT 且限白名单表。" ;
+    rcp:implementedBy rcp:dataway .
+
+rcp:data.execute a rcp:Capability ;
+    rdfs:label "模板写入" ;
+    rcp:definition "按服务端登记模板执行写入，拒绝裸 DML。" ;
+    rcp:implementedBy rcp:dataway .
+
+rcp:schema.migrate a rcp:Capability ;
+    rdfs:label "迁移执行" ;
+    rcp:definition "按版本顺序执行 DDL 迁移。" ;
+    rcp:implementedBy rcp:db-ops .
+
+rcp:schema.version a rcp:Capability ;
+    rdfs:label "版本台账" ;
+    rcp:definition "提供已应用/待应用版本查询。" ;
+    rcp:implementedBy rcp:db-ops .
+
+rcp:ops.console a rcp:Capability ;
+    rdfs:label "运营控制台" ;
+    rcp:definition "风控运营前端，经网关查看派发结果与巡查线状态。" ;
+    rcp:implementedBy rcp:web .
+
+rcp:decision.model a rcp:Capability ;
+    rdfs:label "决策模型" ;
+    rcp:definition "统一决策枚举与风险分映射（库能力，非 HTTP 服务）。" ;
+    rcp:implementedBy rcp:rcp-core .
+
+rcp:patrol.pipeline a rcp:Capability ;
+    rdfs:label "巡查流水线" ;
+    rcp:definition "同构巡查流水线抽象，各巡查线按同一骨架实现。" ;
+    rcp:implementedBy rcp:rcp-core .
+
+rcp:rule.engine a rcp:Capability ;
+    rdfs:label "规则引擎" ;
+    rcp:definition "条件-判定-分值的规则执行内核。" ;
+    rcp:implementedBy rcp:rcp-core .
+
+# ── 决策等级 ────────────────────────────────────────────────────────────
+# 必须与 rcp-contracts/contracts/schemas/decision.yaml 以及 rcp-core 的 Decision
+# 逐字一致（RL-003）。分值只在这里与契约层各写一次，靠 code 对齐，不抄第三遍。
+
+rcp:PASS a rcp:Decision ;
+    rdfs:label "放行" ;
+    rcp:baseScore 0 ;
+    rcp:meaning "未命中或命中但无风险，正常分发。" .
+
+rcp:WARN a rcp:Decision ;
+    rdfs:label "提示" ;
+    rcp:baseScore 20 ;
+    rcp:meaning "存在风险信号但不拦截，仅对当事人提示（如求职侧命中诱导话术）。" .
+
+rcp:LIMIT a rcp:Decision ;
+    rdfs:label "限流" ;
+    rcp:baseScore 40 ;
+    rcp:meaning "限制触达频次或曝光范围，保留业务通路。" .
+
+rcp:EXTRA_REVIEW a rcp:Decision ;
+    rdfs:label "加审" ;
+    rcp:baseScore 60 ;
+    rcp:meaning "转人工或二次审核，通过后才可分发。" .
+
+rcp:INTERCEPT a rcp:Decision ;
+    rdfs:label "拦截" ;
+    rcp:baseScore 80 ;
+    rcp:meaning "直接阻断本次分发（重复洗稿、招聘侧飞单）。" .
+
+rcp:BAN a rcp:Decision ;
+    rdfs:label "封禁" ;
+    rcp:baseScore 100 ;
+    rcp:meaning "账号级处置，需与账号体系联动。" .

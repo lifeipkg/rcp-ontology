@@ -5,13 +5,13 @@
 
 # SHACL 约束（shapes）。分两类：
 #
-#   静态（本文件）：不随 kinds.yaml 内容变化的「固定结构约束」。
+#   静态（本文件）：不随 types 声明（concepts/tbox.ttl）内容变化的「固定结构约束」。
 #   动态（semweb/shapes.py）：白名单 / external 方向 / port、contract 是否必填，
-#       参数来自 kinds.yaml，随数据而变。
+#       参数来自 types 声明（concepts/tbox.ttl），随数据而变。
 #
 # 文件扫描类红线（RL-004/005/007）、跨源比对（RL-003）、键存在性（E001 其余字段）、
-# 唯一键（E002）、能力归属（E111/E112）、expected 形状（E115）、图连通性
-# （E108/E109/E110）不在 SHACL 能力内，仍由 checks.py 承担。边界见 README。
+# 唯一键（E002）、能力命名（E114）、能力归属（E111/E112）、expected 形状（E115）、
+# 图连通性（E108/E109/E110）不在 SHACL 能力内，仍由 checks.py 承担。边界见 README。
 
 # ---- E105：依赖必须指向已登记的服务（dependsOn 对象必须是 rcp:Service） ----
 rcp:RegisteredDependencyShape a sh:NodeShape ;
@@ -72,11 +72,7 @@ rcp:KindIntegrityShape a sh:NodeShape ;
         sh:message "E113: allowed_depends_on_kinds 引用了未声明的种类" ;
     ] .
 
-# ---- E114：能力命名符合点分小写规范 ----
-rcp:CapabilityShape a sh:NodeShape ;
-    sh:targetClass rcp:Capability ;
-    sh:property [
-        sh:path rcp:name ;
-        sh:pattern "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9]*)+$" ;
-        sh:message "E114: 能力名不符合点分小写规范" ;
-    ] .
+# ---- E114 已移出 SHACL ----
+# TBox 迁到 TTL 后，能力名就是实例 IRI 的 local name，图上没有 rcp:name 字面值可挂
+# sh:pattern。留一个永远不命中的形状比没有检查更危险，故该判定移回 checks.py
+# （check_capability_naming），由字典视图上的正则承担。
