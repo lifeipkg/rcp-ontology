@@ -166,15 +166,6 @@ def load_redlines(contracts_root: Path) -> dict[str, Any]:
     return data
 
 
-def load_terms(contracts_root: Path) -> list[dict[str, Any]]:
-    """读平台立名词汇表。缺文件不算错——词汇表是可选声明。"""
-    path = contracts_root / "vocabulary" / "terms.yaml"
-    if not path.is_file():
-        return []
-    data = read_yaml(path) or {}
-    return list(data.get("terms", []))
-
-
 def load_decision_schema(contracts_root: Path, field: str = "enum") -> list[str]:
     """读契约层的决策枚举（真源之一）。字段名可参数化（缺省 enum）。"""
     data = read_yaml(contracts_root / "contracts" / "schemas" / "decision.yaml") or {}
