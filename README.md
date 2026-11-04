@@ -11,7 +11,7 @@
 ## 什么是 TBox、什么是 ABox（本仓口径）
 
 - **TBox（本仓 `concepts/`）**：种类（gateway / patrol-line / data-gateway / db-ops / frontend / meta）、能力立名、决策等级语义。不带具体服务名。
-- **ABox（契约仓 `registry/services.yaml`）**：具体服务实例、端口、依赖、owner。
+- **ABox（契约仓 `registry/services.ttl`）**：具体服务实例、端口、关系边、owner。实例 IRI 即服务名，种类即 `rdf:type`。
 - 契约层（`rcp-contracts/contracts/`）：界面与结构的机器可读形态。
 
 三者必须闭合：ABox 里出现的每个 kind 与 capability 都要在 TBox 声明；决策枚举与分值要逐字一致；
@@ -23,26 +23,31 @@
 
 | 层 | 内容 | 真源 | 为什么是这个格式 |
 |---|---|---|---|
-| 概念实例（ABox） | 服务、库、端口、owner、能力、边实例 | `rcp-contracts/registry/services.yaml` | 高变更频率，需要可评审的 diff 与唯一键检查 |
+| 概念实例（ABox） | 服务、库、端口、owner、能力、边实例 | `rcp-contracts/registry/services.ttl` | 实例与边最终要进推理机；写成三元组后不再有"声明 → 图"的翻译步骤，也就没有翻译器与声明不一致这一类错误 |
 | 概念声明（TBox） | kind 及其五个行为属性、能力立名、决策语义 | `concepts/*.yaml` | 规则即数据：改声明即改判定，不需改代码 |
 | 关系与公理 | 有哪些关系、属于哪张图、是否参与可达性、端点种类 | `ontology/relations.ttl` | `rdfs:subPropertyOf` / `owl:domain` 这类断言无法从 key: value 推导，只能写成三元组 |
 | 结构约束 | SHACL shapes（静态） | `ontology/constraints.ttl` | 表达性约束（`sh:qualifiedValueShape`、`sh:or`），无法从属性机械生成 |
 
-判据一句话：**能写成 `key: value` 的留在 YAML，只关于关系与公理的断言才进 TTL。**
-因此"要不要把 YAML 全换成 TTL"是个错误的提法——换掉的是可操作性，换不来表达能力，
-因为表达能力上限由建模形状决定，不由序列化格式决定。
+判据一句话：**参与推理的进 TTL，纯配置的留 `key: value`。**
+
+- 进 TTL：实例、边、种类、关系公理——它们是图上的东西，推理机读的就是图。
+- 留 YAML：`registry/platform.yaml` 的版本钉与服务发现、`concepts/*.yaml` 的 kind 行为属性、
+  `redlines.yaml` 的策略规格。它们没有图语义，写成三元组只会把"17"变成字面量，
+  连 `grep` 都失去。
+
+换格式的代价要明说：RDF 允许一个属性多值，原 YAML 的"重复键即失败"不再自动成立。
+所以装载器显式判功能属性（`port`/`repo`/`owner`/`external`/`health`）多值并报错——
+这是一条必须在换格式时补上的护栏，不补就等于静默接受 `port 8080, 9090`。
 
 ## 关系层：分域图（`ontology/relations.ttl`）
 
 边不是单一的 `depends_on`。登记可以写多条关系，每条关系属于一张**分域图**：
 
-```yaml
-services:
-  - name: api-gateway
-    relations:
-      calls: [content-patrol, message-patrol]   # 调用图
-      queries: [dataway]                        # 数据图
-    depends_on: [fund-patrol]                   # 旧写法，等价于 relations.calls
+```turtle
+rcp:api-gateway
+    a rcp:Gateway, rcp:Service ;        # 种类即 rdf:type，不写 kind 字面量
+    rcp:calls rcp:content-patrol, rcp:message-patrol ;   # 调用图
+    rcp:queries rcp:dataway .                            # 数据图
 ```
 
 六张图与分域理由：
@@ -70,9 +75,10 @@ rcp:streams_to a rcp:RelationKind, owl:ObjectProperty ;
     rcp:targetKind rcp:Service .       # 端点种类约束（E117 判据）
 ```
 
-`depends_on` 与 `relations.calls` 会在导出时同时产出 `rcp:calls`（类型化边）与
-`rcp:dependsOn`（可达性汇总边）。汇总边是子属性推演的物化结果，由单一事实导出、不回写，
-因此不构成第二份真源；它的价值是让 SHACL、SPARQL、推理机与外部工具不必各自跑一遍推理。
+导出图会为每条可达性边同时产出 `rcp:calls`（类型化边）与 `rcp:dependsOn`（汇总边）。
+汇总边是子属性推演的物化结果，由单一事实导出、不回写，因此不构成第二份真源；
+它的价值是让 SHACL、SPARQL、推理机与外部工具不必各自跑一遍推理。
+**真源里不写汇总边**——写进去等于把推导结论当事实，还会与 `relations.ttl` 的公理重复。
 
 
 **种类的行为全部由 TBox 属性决定，不在代码里硬编码种类名。** 新增种类只改 `concepts/kinds.yaml`：
@@ -202,8 +208,9 @@ python -m pytest -q
 同处一个工作区。单仓 CI 里 `workspace_is_complete()` 返回 false，检查器输出 `S001` 说明哪些
 判定没有执行，并可用 `--require-workspace` 把它升级为失败。这样"绿灯"的含义是确定的。
 
-**2. 重复键即解析失败。** YAML 装载用严格构造器，同一映射里出现重复键直接报错并给出行号。
-多人同时改 `services.yaml` 时，重复键会让"文件里写的"与"程序读到的"不一致，必须显式失败。
+**2. 同一事实只能有一个值。** YAML 用严格构造器：同一映射里出现重复键直接报错并给出行号。
+TTL 没有"重复键"这回事（RDF 天然多值），所以在装载期显式判功能属性多值并报错。
+两种格式失败得更早、更具体，而不是让"文件里写的"与"程序读到的"不一致。
 
 **3. worktree 不算独立仓。** `.git` 是文件且首行以 `gitdir:` 开头的目录被识别为 worktree，
 不参与"未登记仓"判定，也不会被重复扫描。

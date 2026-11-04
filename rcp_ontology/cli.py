@@ -266,15 +266,22 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     kind_zh = {k["name"]: k.get("zh", k["name"]) for k in concepts["kinds"]}
     cap_zh = {c["name"]: c.get("zh", c["name"]) for c in concepts["capabilities"]}
+    stack = registry.get("baseline_stack") or {}
+    stack_text = " / ".join(f"{k} {v}" for k, v in stack.items()) or "未声明"
 
     lines = ["# 平台服务目录（由 rcp-ontology 渲染，勿手改）", "",
-             f"基座版本：{registry.get('baseline_stack', {})}", "",
+             f"基座版本：{stack_text}", "",
              "## 服务", "",
-             "| 服务 | 种类 | 端口 | 对外 | 能力 | 依赖 |",
+             "| 服务 | 种类 | 端口 | 对外 | 能力 | 关系 |",
              "|---|---|---|---|---|---|"]
     for service in registry.get("services", []):
         caps = "、".join(cap_zh.get(c, c) for c in service.get("capabilities") or []) or "—"
-        deps = "、".join(service.get("depends_on") or []) or "—"
+        edges = [
+            f"{rel}→{target}"
+            for rel, targets in service_relations(service).items()
+            for target in targets
+        ]
+        deps = "、".join(edges) or "—"
         port = service.get("port", "—")
         lines.append(
             f"| `{service.get('name')}` | {kind_zh.get(service.get('kind'), service.get('kind'))} "
@@ -407,7 +414,7 @@ def cmd_owners(args: argparse.Namespace) -> int:
         return f"@{args.org}/{owner}" if args.org else f"@{owner}"
 
     lines = [
-        "# 由 rcp-ontology owners 生成，勿手改 —— 真源是 rcp-contracts/registry/services.yaml",
+        "# 由 rcp-ontology owners 生成，勿手改 —— 真源是 rcp-contracts/registry/services.ttl",
         "# 每行 handle 必须是 GitHub 上真实存在的用户或团队 slug。",
         "",
     ]

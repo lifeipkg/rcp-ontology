@@ -629,7 +629,7 @@ def check_repo_registration(
             Finding(
                 "error",
                 "E107",
-                f"工作区存在 {name}，但 registry/services.yaml 未登记该仓（先登记再开发）",
+                f"工作区存在 {name}，但 registry/services.ttl 未登记该仓（先登记再开发）",
                 SCOPE_WORKSPACE,
             )
         )

@@ -5,7 +5,7 @@
 - ``ontology/relations.ttl``（手写 TTL）：有哪些关系、属于哪张图、该图是否参与可达性、
   端点种类约束、是否已启用判定。这些是「关于关系的断言」，无法从任何 key: value
   属性推导，只能写成语义三元组。
-- ``registry/services.yaml``（YAML）：谁对谁有这条边，是可评审的事实。
+- ``registry/services.ttl``（ABox）：谁对谁有这条边，是可评审的事实。
 
 所以真源不是「某一种格式」，而是「每一层只有一个编辑面」。关系公有 N 条时，加一条
 关系只改 relations.ttl，不改本文件、不改 checks、不改 shapes。

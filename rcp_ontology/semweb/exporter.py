@@ -26,13 +26,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from rdflib import Graph, Literal
+from rdflib import BNode, Graph, Literal
 from rdflib.namespace import RDF, RDFS, XSD
 
 from ..relations import kind_class, relation_graph, service_relations
 from .namespaces import RCP
 
 __all__ = ["build_rdf", "kind_class"]
+
+# 预期状态声明（expected）的字段 → 谓词。与 registry_ttl 的还原表互为逆映射，
+# 两边同时改才不会丢字段。
+_EXPECTED_PREDICATES = (
+    ("no_dependents", RCP.noDependents, True),
+    ("unreachable", RCP.unreachable, True),
+    ("reason", RCP.reason, False),
+    ("owner", RCP.owner, False),
+    ("review_by", RCP.reviewBy, False),
+)
 
 
 def _service_node(
@@ -70,6 +80,20 @@ def _service_node(
         g.add((node, RCP.hasCapability, RCP[str(cap)]))
     for rel in service.get("contracts") or []:
         g.add((node, RCP.contract, Literal(str(rel))))
+    if service.get("health"):
+        g.add((node, RCP.health, Literal(str(service["health"]))))
+    expected = service.get("expected")
+    if isinstance(expected, dict):
+        detail = BNode()
+        g.add((node, RCP.expected, detail))
+        for key, pred, as_bool in _EXPECTED_PREDICATES:
+            value = expected.get(key)
+            if value is None:
+                continue
+            if as_bool:
+                g.add((detail, pred, Literal(bool(value), datatype=XSD.boolean)))
+            else:
+                g.add((detail, pred, Literal(str(value))))
 
 
 def _library_node(g: Graph, name: str, library: dict[str, Any]) -> None:
