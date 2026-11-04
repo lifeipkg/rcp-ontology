@@ -11,11 +11,75 @@
 ## 什么是 TBox、什么是 ABox（本仓口径）
 
 - **TBox（本仓 `concepts/`）**：种类（gateway / patrol-line / data-gateway / db-ops / frontend / meta）、能力立名、决策等级语义。不带具体服务名。
-- **ABox（契约仓 `registry/services.yaml`）**：具体服务实例、端口、依赖、owner。
+- **ABox（契约仓 `registry/services.ttl`）**：具体服务实例、端口、关系边、owner。实例 IRI 即服务名，种类即 `rdf:type`。
 - 契约层（`rcp-contracts/contracts/`）：界面与结构的机器可读形态。
 
 三者必须闭合：ABox 里出现的每个 kind 与 capability 都要在 TBox 声明；决策枚举与分值要逐字一致；
 每个 kind 都要在 `vocabulary/terms.yaml` 立名。
+
+## 真源分层：事实与表达分开
+
+仓里没有"唯一一种格式的真源"，只有"每一层只有一个编辑面"：
+
+| 层 | 内容 | 真源 | 为什么是这个格式 |
+|---|---|---|---|
+| 概念实例（ABox） | 服务、库、端口、owner、能力、边实例 | `rcp-contracts/registry/services.ttl` | 实例与边最终要进推理机；写成三元组后不再有"声明 → 图"的翻译步骤，也就没有翻译器与声明不一致这一类错误 |
+| 概念声明（TBox） | kind 及其五个行为属性、能力立名、决策语义 | `concepts/*.yaml` | 规则即数据：改声明即改判定，不需改代码 |
+| 关系与公理 | 有哪些关系、属于哪张图、是否参与可达性、端点种类 | `ontology/relations.ttl` | `rdfs:subPropertyOf` / `owl:domain` 这类断言无法从 key: value 推导，只能写成三元组 |
+| 结构约束 | SHACL shapes（静态） | `ontology/constraints.ttl` | 表达性约束（`sh:qualifiedValueShape`、`sh:or`），无法从属性机械生成 |
+
+判据一句话：**参与推理的进 TTL，纯配置的留 `key: value`。**
+
+- 进 TTL：实例、边、种类、关系公理——它们是图上的东西，推理机读的就是图。
+- 留 YAML：`registry/platform.yaml` 的版本钉与服务发现、`concepts/*.yaml` 的 kind 行为属性、
+  `redlines.yaml` 的策略规格。它们没有图语义，写成三元组只会把"17"变成字面量，
+  连 `grep` 都失去。
+
+换格式的代价要明说：RDF 允许一个属性多值，原 YAML 的"重复键即失败"不再自动成立。
+所以装载器显式判功能属性（`port`/`repo`/`owner`/`external`/`health`）多值并报错——
+这是一条必须在换格式时补上的护栏，不补就等于静默接受 `port 8080, 9090`。
+
+## 关系层：分域图（`ontology/relations.ttl`）
+
+边不是单一的 `depends_on`。登记可以写多条关系，每条关系属于一张**分域图**：
+
+```turtle
+rcp:api-gateway
+    a rcp:Gateway, rcp:Service ;        # 种类即 rdf:type，不写 kind 字面量
+    rcp:calls rcp:content-patrol, rcp:message-patrol ;   # 调用图
+    rcp:queries rcp:dataway .                            # 数据图
+```
+
+六张图与分域理由：
+
+| 图 | 是否参与可达性 | 为什么这样分 |
+|---|---|---|
+| `call` | 是 | 代码事实：同步调用、发布、订阅。环与不可达只在这张图上判 |
+| `data` | 否 | 经 dataway 的读写与表级血缘。直连数据库由 RL-005 另判 |
+| `contract` | 否 | 服务与 OpenAPI/schema 的归属，RL-003 的载体 |
+| `build` | 否 | 编译期依赖与版本基线。基座被全员依赖，套进可达性会得出全连通 |
+| `deploy` | 否 | workload、共置、网关路由。路由是配置事实，不等于有人在调 |
+| `governance` | 否 | 归属、红线、例外。回答 who，不回答 can-reach |
+
+不分域的后果是确定的：部署共置与数据血缘混进调用图，E108 会把合法的双向引用判成环，
+E110 会把不参与调用的基座判成不可达。
+
+新增一条关系只改 `relations.ttl`——不改代码、不改检查、不改 shapes：
+
+```turtle
+rcp:streams_to a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "streams_to" ;
+    rcp:graph rcp:CallGraph ;          # 进哪张图
+    rcp:status "declared" ;            # enforced = 参与判定；declared = 仅立名
+    rdfs:subPropertyOf rcp:dependsOn ; # 参与可达性才需要
+    rcp:targetKind rcp:Service .       # 端点种类约束（E117 判据）
+```
+
+导出图会为每条可达性边同时产出 `rcp:calls`（类型化边）与 `rcp:dependsOn`（汇总边）。
+汇总边是子属性推演的物化结果，由单一事实导出、不回写，因此不构成第二份真源；
+它的价值是让 SHACL、SPARQL、推理机与外部工具不必各自跑一遍推理。
+**真源里不写汇总边**——写进去等于把推导结论当事实，还会与 `relations.ttl` 的公理重复。
+
 
 **种类的行为全部由 TBox 属性决定，不在代码里硬编码种类名。** 新增种类只改 `concepts/kinds.yaml`：
 
@@ -50,8 +114,12 @@ python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace .. --b
 # 此时应加 --checker-ref 指向与基线同时代的本体仓提交。
 python rcp_ontology/cli.py check --contracts ../rcp-contracts --workspace .. --baseline origin/main --checker-ref HEAD~1
 
-# 改一个服务之前，先看它会波及谁
+# 改一个服务之前，先看它会波及谁（--graph 选域：call/data/contract/build/deploy/governance）
 python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway
+python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway --graph data
+
+# 我们到底建模了哪些关系、哪些还只是立了名没有实例
+python rcp_ontology/cli.py relations --contracts ../rcp-contracts
 
 # 按 owner 生成 CODEOWNERS（让归属落到审批上）
 python rcp_ontology/cli.py owners --contracts ../rcp-contracts --org your-org --out .github/CODEOWNERS
@@ -89,7 +157,7 @@ python -m pytest -q
 
 | 编号 | 判据 | 承担 | 级别 |
 |---|---|---|---|
-| E108 | 依赖成环 | Python | error |
+| E108 | 依赖成环（每张有边的分域图各判一次，消息标注图名） | Python | error |
 | E109 | 非入口节点入度为 0（可能是备用通道，也可能漏登记依赖方）；命中 `expected.no_dependents` 声明且未过期则静默 | Python | warn |
 | E110 | 从任何对外入口都不可达；命中 `expected.unreachable` 声明且未过期则静默 | Python | warn |
 | E111 | 能力的 owner 未在 services/libraries 登记 | Python | error |
@@ -98,6 +166,16 @@ python -m pytest -q
 | E114 | 能力名不符合点分小写规范（如 `Patrol_Dispatch`） | SHACL | error |
 | E115 | 服务 `expected` 预期状态声明不合法（非映射 / 未知字段 / 标志非布尔 / 缺 reason/owner/review_by / review_by 非日期） | Python | error |
 | W306 | `expected` 声明与事实不符（声明无依赖但已有依赖方 / 声明不可达但已可达），提示移除过时声明 | Python | warn |
+
+### 关系与公理
+
+| 编号 | 判据 | 承担 | 级别 |
+|---|---|---|---|
+| E116 | 登记里的边使用了未在 `relations.ttl` 声明的关系名 | Python | error |
+| E117 | 边的目标种类不符合该关系声明的 `targetKind` | Python | error |
+| E118 | 关系未声明所属图，或引用了未声明的图 | Python | error |
+| W307 | 关系标 `enforced` 但登记里零实例（判定空转） | Python | warn |
+| S002 | 缺少 `relations.ttl`，关系级判定未执行（明示跳过） | Python | info |
 
 ### 红线与元检查
 
@@ -130,8 +208,9 @@ python -m pytest -q
 同处一个工作区。单仓 CI 里 `workspace_is_complete()` 返回 false，检查器输出 `S001` 说明哪些
 判定没有执行，并可用 `--require-workspace` 把它升级为失败。这样"绿灯"的含义是确定的。
 
-**2. 重复键即解析失败。** YAML 装载用严格构造器，同一映射里出现重复键直接报错并给出行号。
-多人同时改 `services.yaml` 时，重复键会让"文件里写的"与"程序读到的"不一致，必须显式失败。
+**2. 同一事实只能有一个值。** YAML 用严格构造器：同一映射里出现重复键直接报错并给出行号。
+TTL 没有"重复键"这回事（RDF 天然多值），所以在装载期显式判功能属性多值并报错。
+两种格式失败得更早、更具体，而不是让"文件里写的"与"程序读到的"不一致。
 
 **3. worktree 不算独立仓。** `.git` 是文件且首行以 `gitdir:` 开头的目录被识别为 worktree，
 不参与"未登记仓"判定，也不会被重复扫描。
@@ -164,7 +243,7 @@ SPARQL 查询处理。**YAML 仍是真源**，RDF 是它的图形态。
 | 技术 | 回答的问题 | 本仓对应 | 命令 |
 |---|---|---|---|
 | RDF | 事实如何描述 | `rcp_ontology/semweb/exporter.py`：YAML → 三元组 | `cli.py export` |
-| OWL | 从已知推未知 | `ontology/rcp.ttl` + `reasoner.py`：传递依赖闭包 | 测试交叉验证 |
+| OWL | 从已知推未知 | `ontology/rcp.ttl`（类与传递属性）+ `ontology/relations.ttl`（关系公理）+ `reasoner.py` | 测试交叉验证 |
 | SHACL | 哪里违规 | `ontology/constraints.ttl`（静态）+ `shapes.py`（动态，从 `kinds.yaml` 编译）+ `validator.py` | `cli.py shacl` |
 | SPARQL | 如何提问 | `query.py`：属性路径 `dependsOn+` | `cli.py sparql` |
 

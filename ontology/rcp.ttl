@@ -6,6 +6,9 @@
 # 平台本体（OWL）。声明种类（类）、依赖（对象属性）与数据属性的语义。
 # 本文件只定义"概念与公理"（TBox），不含具体服务实例（ABox 由 exporter 从
 # registry/services.yaml 生成）。与 concepts/kinds.yaml 是同一份概念的两套表达。
+#
+# 关系类型（calls / queries / depends_artifact 等）的公理不在这里，见 relations.ttl：
+# 那里是关系层的真源，本文件只保留 dependsOn 这个可达性汇总属性与通用类定义。
 
 # ---- 类层级：服务种类都是 Service 的子类 ----
 

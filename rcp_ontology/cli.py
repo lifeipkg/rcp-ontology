@@ -36,6 +36,11 @@ from rcp_ontology.loader import (  # noqa: E402
     load_concepts,
     load_registry,
 )
+from rcp_ontology.relations import (  # noqa: E402
+    iter_edges,
+    load_relations,
+    service_relations,
+)
 
 LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 
@@ -46,6 +51,24 @@ ONTOLOGY_ROOT = Path(__file__).resolve().parent.parent
 def _fmt(finding) -> str:
     tag = "[跨仓] " if finding.scope == SCOPE_WORKSPACE else ""
     return f"[{finding.level.upper():5}] {tag}{finding.code}: {finding.message}"
+
+
+def _load_declarations(args: argparse.Namespace):
+    """读三份真源：登记（YAML）、概念（YAML）、关系与公理（TTL）。
+
+    关系层缺文件不致命：返回 None，由检查器输出 S002 明示"关系级判定未执行"，
+    而不是让命令直接失败——这与「不可判就明说跳过」的约定一致。
+    """
+    contracts = Path(args.contracts).resolve()
+    concepts_dir = Path(args.concepts).resolve() if getattr(args, "concepts", None) else ONTOLOGY_ROOT / "concepts"
+    registry = load_registry(contracts)
+    concepts = load_concepts(concepts_dir)
+    try:
+        relations = load_relations(concepts_dir.parent / "ontology")
+    except LoadError as exc:
+        print(f"[rcp-ontology] 关系层不可用，关系级判定跳过: {exc}", file=sys.stderr)
+        relations = None
+    return registry, concepts, relations, contracts
 
 
 def _extract_repo_at(repo: Path, ref: str) -> Path:
@@ -243,15 +266,22 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     kind_zh = {k["name"]: k.get("zh", k["name"]) for k in concepts["kinds"]}
     cap_zh = {c["name"]: c.get("zh", c["name"]) for c in concepts["capabilities"]}
+    stack = registry.get("baseline_stack") or {}
+    stack_text = " / ".join(f"{k} {v}" for k, v in stack.items()) or "未声明"
 
     lines = ["# 平台服务目录（由 rcp-ontology 渲染，勿手改）", "",
-             f"基座版本：{registry.get('baseline_stack', {})}", "",
+             f"基座版本：{stack_text}", "",
              "## 服务", "",
-             "| 服务 | 种类 | 端口 | 对外 | 能力 | 依赖 |",
+             "| 服务 | 种类 | 端口 | 对外 | 能力 | 关系 |",
              "|---|---|---|---|---|---|"]
     for service in registry.get("services", []):
         caps = "、".join(cap_zh.get(c, c) for c in service.get("capabilities") or []) or "—"
-        deps = "、".join(service.get("depends_on") or []) or "—"
+        edges = [
+            f"{rel}→{target}"
+            for rel, targets in service_relations(service).items()
+            for target in targets
+        ]
+        deps = "、".join(edges) or "—"
         port = service.get("port", "—")
         lines.append(
             f"| `{service.get('name')}` | {kind_zh.get(service.get('kind'), service.get('kind'))} "
@@ -272,15 +302,14 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 
 def cmd_impact(args: argparse.Namespace) -> int:
-    """改一个服务之前，先看它会波及谁。"""
-    contracts = Path(args.contracts).resolve()
+    """改一个服务之前，先看它会波及谁。--graph 选择在哪个域上算闭包。"""
     try:
-        registry = load_registry(contracts)
+        registry, _concepts, relations, _contracts = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    graph = G.build_graph(registry)
+    graph = G.build_graph(registry, relations, args.graph)
     name = args.service
     if name not in graph:
         print(f"[rcp-ontology] 未登记的服务: {name}", file=sys.stderr)
@@ -289,12 +318,19 @@ def cmd_impact(args: argparse.Namespace) -> int:
     services = {s.get("name"): s for s in registry.get("services", [])}
     downstream = G.dependents_of(graph, name)
     upstream = G.dependencies_of(graph, name)
+    edges = {
+        rel: targets
+        for rel, targets in service_relations(services[name]).items()
+        if relations is None or relations.get("relations", {}).get(rel, {}).get("graph") == args.graph
+    }
 
     if args.json:
         print(json.dumps({
             "service": name,
             "kind": services[name].get("kind"),
             "owner": services[name].get("owner"),
+            "graph": args.graph,
+            "relations": edges,
             "depends_on": sorted(upstream),
             "depended_by": sorted(downstream),
             "impact_count": len(downstream),
@@ -302,11 +338,56 @@ def cmd_impact(args: argparse.Namespace) -> int:
         return 0
 
     print(f"服务 {name}（kind={services[name].get('kind')}，owner={services[name].get('owner')}）")
-    print(f"  直接依赖     : {', '.join(graph.get(name, [])) or '无'}")
+    print(f"  作用域图     : {args.graph}")
+    detail = "; ".join(f"{rel}→{', '.join(t)}" for rel, t in sorted(edges.items())) or "无"
+    print(f"  出边明细     : {detail}")
     print(f"  间接依赖闭包 : {', '.join(sorted(upstream)) or '无'}")
     print(f"  被谁依赖     : {', '.join(sorted(downstream)) or '无'}")
     print(f"\n改它的契约会波及 {len(downstream)} 个服务"
           + (f"：{', '.join(sorted(downstream))}" if downstream else "（当前无人依赖）"))
+    return 0
+
+
+def cmd_relations(args: argparse.Namespace) -> int:
+    """列出关系类型与所属图，以及登记里各关系的实例数。
+
+    回答"我们到底建模了哪些关系、哪些还只是立了名没有实例"，避免把纸面声明当成
+    已生效的判定。--json 供外部消费（例如生成架构文档）。
+    """
+    try:
+        registry, _concepts, relations, _contracts = _load_declarations(args)
+    except LoadError as exc:
+        print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
+        return 2
+    if relations is None:
+        print("[rcp-ontology] 关系层不可用，无法列出关系", file=sys.stderr)
+        return 2
+
+    counts: dict[str, int] = {}
+    for _source, rel, _target in iter_edges(registry):
+        counts[rel] = counts.get(rel, 0) + 1
+
+    if args.json:
+        print(json.dumps({
+            "graphs": relations["graphs"],
+            "relations": {
+                name: {**spec, "instances": counts.get(name, 0)}
+                for name, spec in sorted(relations["relations"].items())
+            },
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    print("图（标 * 参与可达性，环与不可达只在此类图上判）：")
+    for name, spec in sorted(relations["graphs"].items()):
+        mark = "*" if spec.get("reachability") else " "
+        print(f"  {mark} {name:11} {spec.get('label', '')}")
+    print("\n关系（status=enforced 参与判定，declared 仅立名）：")
+    header = f"  {'关系':14} {'图':11} {'状态':9} {'实例':>4} 允许目标种类"
+    print(header)
+    for name, spec in sorted(relations["relations"].items()):
+        allowed = ", ".join(spec.get("target_kinds") or []) or "—"
+        print(f"  {name:14} {spec.get('graph', ''):11} {spec.get('status', ''):9} "
+              f"{counts.get(name, 0):>4} {allowed}")
     return 0
 
 
@@ -333,7 +414,7 @@ def cmd_owners(args: argparse.Namespace) -> int:
         return f"@{args.org}/{owner}" if args.org else f"@{owner}"
 
     lines = [
-        "# 由 rcp-ontology owners 生成，勿手改 —— 真源是 rcp-contracts/registry/services.yaml",
+        "# 由 rcp-ontology owners 生成，勿手改 —— 真源是 rcp-contracts/registry/services.ttl",
         "# 每行 handle 必须是 GitHub 上真实存在的用户或团队 slug。",
         "",
     ]
@@ -356,19 +437,16 @@ def cmd_owners(args: argparse.Namespace) -> int:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    """L1 导出：YAML 声明 → RDF/Turtle。YAML 仍是真源，RDF 是它的图形态。"""
-    contracts = Path(args.contracts).resolve()
-    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
+    """L1 导出：声明 → RDF/Turtle。真源仍是 YAML 事实 + TTL 关系公理，RDF 是图形态。"""
     try:
-        registry = load_registry(contracts)
-        concepts = load_concepts(concepts_dir or ONTOLOGY_ROOT / "concepts")
+        registry, concepts, relations, _contracts = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
     from rcp_ontology.semweb import build_rdf
 
-    graph = build_rdf(registry, concepts)
+    graph = build_rdf(registry, concepts, relations)
     text = graph.serialize(format="turtle")
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
@@ -380,18 +458,15 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 def cmd_shacl(args: argparse.Namespace) -> int:
     """L3 验证：对导出的 RDF 图跑 SHACL 约束（静态 + 动态 shapes）。"""
-    contracts = Path(args.contracts).resolve()
-    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
     try:
-        registry = load_registry(contracts)
-        concepts = load_concepts(concepts_dir or ONTOLOGY_ROOT / "concepts")
+        registry, concepts, relations, _contracts = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
     from rcp_ontology.semweb import build_rdf, validate_all
 
-    graph = build_rdf(registry, concepts)
+    graph = build_rdf(registry, concepts, relations)
     shapes = ONTOLOGY_ROOT / "ontology" / "constraints.ttl"
     conforms, findings = validate_all(graph, shapes, concepts)
 
@@ -412,11 +487,8 @@ def cmd_shacl(args: argparse.Namespace) -> int:
 
 def cmd_sparql(args: argparse.Namespace) -> int:
     """L4 查询：SPARQL 属性路径（dependsOn+）算依赖闭包，对照 impact 命令。"""
-    contracts = Path(args.contracts).resolve()
-    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
     try:
-        registry = load_registry(contracts)
-        concepts = load_concepts(concepts_dir or ONTOLOGY_ROOT / "concepts")
+        registry, concepts, relations, _contracts = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -427,7 +499,7 @@ def cmd_sparql(args: argparse.Namespace) -> int:
         sparql_dependents_of,
     )
 
-    graph = build_rdf(registry, concepts)
+    graph = build_rdf(registry, concepts, relations)
     name = args.service
     upstream = sparql_dependencies_of(graph, name)
     downstream = sparql_dependents_of(graph, name)
@@ -481,9 +553,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     impact = sub.add_parser("impact", help="查一个服务的依赖与被依赖闭包")
     impact.add_argument("--contracts", required=True, help="契约仓根目录")
+    impact.add_argument("--concepts", help="TBox 目录")
     impact.add_argument("--service", required=True, help="服务名（registry 里的 name）")
+    impact.add_argument(
+        "--graph",
+        default="call",
+        help="在哪个域图上算闭包（call/data/contract/build/deploy/governance），缺省 call",
+    )
     impact.add_argument("--json", action="store_true", help="输出 JSON")
     impact.set_defaults(func=cmd_impact)
+
+    relations = sub.add_parser("relations", help="列出关系类型、所属图与实例数")
+    relations.add_argument("--contracts", required=True, help="契约仓根目录")
+    relations.add_argument("--concepts", help="TBox 目录")
+    relations.add_argument("--json", action="store_true", help="输出 JSON")
+    relations.set_defaults(func=cmd_relations)
 
     owners = sub.add_parser("owners", help="按 owner 生成 CODEOWNERS")
     owners.add_argument("--contracts", required=True, help="契约仓根目录")

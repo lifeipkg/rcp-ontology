@@ -36,6 +36,13 @@ from .loader import (
     load_registry,
     read_yaml,
 )
+from .relations import (
+    declared_names,
+    iter_edges,
+    kind_class,
+    load_relations,
+    reachability_graphs,
+)
 
 REQUIRED_SERVICE_FIELDS = ("name", "repo", "kind", "external", "owner", "capabilities")
 
@@ -57,6 +64,14 @@ EXPECTED_KEYS = ("no_dependents", "unreachable", "reason", "owner", "review_by")
 
 def _kind_map(concepts: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
     return {k["name"]: k for k in concepts["kinds"]}
+
+
+def _load_relations_or_none(ontology_dir: Path) -> dict[str, Any] | None:
+    """读关系层真源；缺文件返回 None，由 check_relations 输出 S002 明示未执行。"""
+    try:
+        return load_relations(ontology_dir)
+    except Exception:  # noqa: BLE001 - 声明不可用时降级为"未执行"，不伪装通过
+        return None
 
 
 def _kind_prop(
@@ -365,19 +380,147 @@ def check_expected_state(registry: dict[str, Any]) -> list[Finding]:
     return findings
 
 
+def check_relations(
+    registry: dict[str, Any],
+    relations: dict[str, Any] | None,
+    concepts: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[Finding]:
+    """E116 边用了未声明的关系 / E117 端点种类越界 / E118 关系引用未声明的图。
+
+    关系名与图名都是概念层的东西，只能由 relations.ttl 声明。登记里出现未声明的
+    关系名意味着有人在"先上车后补票"——那条边既不会被分域，也不会被任何端点约束
+    检查，等于静默绕过全部关系级判定。
+
+    E105（目标未登记）在可达性图上已由 SHACL 的 dependsOn 路径承担；非可达性图只产出
+    typed 边、没有 dependsOn 汇总边，故这里补判，避免"数据/治理边指向幽灵服务"漏网。
+    E117（端点种类）需要取目标节点的 kind，属跨节点比对，SHACL 的 sh:class 能表达
+    但无法区分"未登记"与"种类不符"，两类结论会重复报同一件事，故留在 Python 侧。
+    """
+    findings: list[Finding] = []
+    if relations is None:
+        findings.append(
+            Finding(
+                "info",
+                "S002",
+                "缺少 ontology/relations.ttl，关系级判定（E116/E117/E118）未执行",
+            )
+        )
+        return findings
+
+    declared = declared_names(relations)
+    graphs = relations.get("graphs", {})
+    reach = set(reachability_graphs(relations))
+
+    for name, spec in sorted(relations.get("relations", {}).items()):
+        graph_name = spec.get("graph")
+        if not graph_name:
+            findings.append(Finding("error", "E118", f"关系 {name} 未声明所属图"))
+        elif graph_name not in graphs:
+            findings.append(
+                Finding("error", "E118", f"关系 {name} 引用了未声明的图: {graph_name}")
+            )
+
+    entities = {s.get("name"): s for s in registry.get("services", []) if s.get("name")}
+    entities.update({l.get("name"): l for l in registry.get("libraries", []) if l.get("name")})
+
+    unknown: dict[str, list[str]] = {}
+    counts: Counter[str] = Counter()
+    for source, rel, target in iter_edges(registry):
+        counts[rel] += 1
+        if rel not in declared:
+            unknown.setdefault(rel, []).append(f"{source}→{target}")
+            continue
+
+        spec = relations["relations"][rel]
+        in_reach = spec.get("graph") in reach
+        # 只有把目标声明为服务的关系，才要求目标在 registry 里登记。表、契约、workload
+        # 这些目标是词汇对象，不在 services/libraries 里，套用 E105 会全是误报。
+        requires_registered = "Service" in (spec.get("target_kinds") or [])
+        if target not in entities:
+            if requires_registered and not in_reach:
+                findings.append(
+                    Finding(
+                        "error",
+                        "E105",
+                        f"{source} 的 {rel} 指向未登记的目标: {target}",
+                    )
+                )
+            continue
+
+        allowed = spec.get("target_kinds") or []
+        if allowed:
+            # 库没有 kind：构建期依赖不是服务。rcp:Service 语义上只覆盖挂了 kind
+            # 且非 meta 的已登记服务，否则"calls 指向库"会被误判为合法。
+            target_kind = entities[target].get("kind")
+            cls = kind_class(str(target_kind)) if target_kind else "Library"
+            is_service = target_kind is not None and cls != "Meta"
+            ok = cls in allowed or ("Service" in allowed and is_service)
+            if not ok:
+                findings.append(
+                    Finding(
+                        "error",
+                        "E117",
+                        f"{source} 的 {rel} 指向 {target}（kind={target_kind or '库'}），"
+                        f"该关系只允许 {', '.join(allowed)}",
+                    )
+                )
+
+    for rel, uses in sorted(unknown.items()):
+        findings.append(
+            Finding(
+                "error",
+                "E116",
+                f"关系 {rel} 未在 ontology/relations.ttl 声明，出现在: {', '.join(uses)}",
+            )
+        )
+
+    for name, spec in sorted(relations.get("relations", {}).items()):
+        if spec.get("status") == "enforced" and counts.get(name, 0) == 0:
+            findings.append(
+                Finding(
+                    "warn",
+                    "W307",
+                    f"关系 {name} 标记 enforced，但登记里没有任何实例，该判定当前空转",
+                )
+            )
+    return findings
+
+
 def check_dependency_graph(
     registry: dict[str, Any],
     concepts: dict[str, list[dict[str, Any]]],
+    relations: dict[str, Any] | None = None,
 ) -> list[Finding]:
-    """E108 依赖成环 / E109 非入口节点无人依赖 / E110 入口不可达。"""
+    """E108 成环（每张有边的图）/ E109 入度为 0 / E110 不可达（仅可达性图）。
+
+    成环在每张图上都判——构建图的双向引用同样是错误。入度与可达性只判可达性图，
+    因为这些判据回答的是"运行时还能不能到达"，部署与血缘图上问这个问题没有意义。
+    """
     findings: list[Finding] = []
-    graph = G.build_graph(registry)
+    graphs = G.build_graphs(registry, relations)
     kinds = _kind_map(concepts)
 
-    for cycle in G.find_cycles(graph):
-        findings.append(
-            Finding("error", "E108", "依赖成环: " + " → ".join(cycle + [cycle[0]]))
-        )
+    for graph_name, adjacency in sorted(graphs.items()):
+        if not any(adjacency.values()):
+            continue
+        for cycle in G.find_cycles(adjacency):
+            findings.append(
+                Finding(
+                    "error",
+                    "E108",
+                    f"依赖成环({graph_name}): " + " → ".join(cycle + [cycle[0]]),
+                )
+            )
+
+    reach = sorted(reachability_graphs(relations) & set(graphs)) if relations else []
+    if reach:
+        graph = {name: list(adj) for name, adj in graphs[reach[0]].items()}
+        for extra in reach[1:]:
+            for name, adj in graphs[extra].items():
+                merged = graph.setdefault(name, [])
+                merged.extend(t for t in adj if t not in merged)
+    else:
+        graph = G.build_graph(registry, relations, G.CALL_GRAPH)
 
     degrees = G.in_degrees(graph)
     services = {s.get("name"): s for s in registry.get("services", []) if s.get("name")}
@@ -486,7 +629,7 @@ def check_repo_registration(
             Finding(
                 "error",
                 "E107",
-                f"工作区存在 {name}，但 registry/services.yaml 未登记该仓（先登记再开发）",
+                f"工作区存在 {name}，但 registry/services.ttl 未登记该仓（先登记再开发）",
                 SCOPE_WORKSPACE,
             )
         )
@@ -515,18 +658,20 @@ def _spec_by_id(redlines: dict[str, Any], redline_id: str) -> dict[str, Any] | N
 def check_shacl(
     registry: dict[str, Any],
     concepts: dict[str, list[dict[str, Any]]],
+    relations: dict[str, Any] | None = None,
 ) -> list[Finding]:
     """用 SHACL（静态 + 动态 shapes）验证导出的 RDF 图，映射回 Finding。
 
     覆盖从 Python 迁移到声明式约束的检查：E105 依赖未登记、E106/RL-001 依赖
     白名单、RL-002 external 方向、E201 种类声明、E202 能力立名、E113 TBox 自洽、
-    E114 命名、RL-006 挂契约。这些全部是「值/关系约束」，在 RDF 图上无损表达；
-    键存在性、跨源比对、文件扫描等不在 SHACL 能力内，仍由本文件其它函数承担。
+    E114 命名、RL-006 挂契约、E117 关系端点越界。这些全部是「值/关系约束」，
+    在 RDF 图上无损表达；键存在性、跨源比对、文件扫描等不在 SHACL 能力内，
+    仍由本文件其它函数承担。
     """
     from rcp_ontology.semweb import build_rdf, validate_all
 
     shapes_path = Path(__file__).resolve().parent.parent / "ontology" / "constraints.ttl"
-    graph = build_rdf(registry, concepts)
+    graph = build_rdf(registry, concepts, relations)
     _, findings = validate_all(graph, shapes_path, concepts)
     return [
         Finding("error", f.code, f"{f.focus}: {f.message}" if f.focus else f.message)
@@ -555,16 +700,18 @@ def check_declarations(
     registry = load_registry(contracts_root)
     concepts = load_concepts(concepts_dir)
     redlines = load_redlines(contracts_root)
+    relations = _load_relations_or_none(concepts_dir.parent / "ontology")
 
     findings: list[Finding] = []
     findings += check_rule_specs(redlines)
+    findings += check_relations(registry, relations, concepts)
     findings += check_registry_shape(registry)
     findings += check_expected_state(registry)
     findings += check_decision_alignment(contracts_root, concepts, _spec_by_id(redlines, "RL-003"))
     findings += check_contracts_exist(contracts_root, registry, concepts)
     findings += check_capability_ownership(registry, concepts)
-    findings += check_dependency_graph(registry, concepts)
-    findings += check_shacl(registry, concepts)
+    findings += check_dependency_graph(registry, concepts, relations)
+    findings += check_shacl(registry, concepts, relations)
     return findings
 
 

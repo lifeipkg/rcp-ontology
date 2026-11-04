@@ -1,10 +1,16 @@
 """本体仓：概念装载与结果类型。
 
 TBox（概念/种类/能力/决策语义）在 concepts/，ABox（具体服务实例）在契约仓
-registry/services.yaml。本包只读，不写任何声明文件。
+``registry/services.ttl``。本包只读，不写任何声明文件。
 
-YAML 一律用严格装载：重复键视为解析失败，而不是静默取后者。多人同时编辑同一份
-声明时，重复键会让"文件里写了什么"与"程序读到什么"不一致，这类错误必须显式失败。
+两种序列化各用各的严格性：
+
+- YAML：重复键视为解析失败，而不是静默取后者。多人同时编辑同一份声明时，重复键
+  会让"文件里写了什么"与"程序读到什么"不一致，这类错误必须显式失败。
+- TTL：RDF 允许多值，所以功能属性（port/repo/owner/external/health）的多值由
+  ``registry_ttl`` 在装载期报错——这是同一条护栏在另一种格式上的等价实现。
+
+``services.yaml`` 仍可读（兼容回退），但新仓与新改动一律写 TTL。
 """
 
 from __future__ import annotations
@@ -85,11 +91,41 @@ def read_yaml(path: Path) -> Any:
         raise LoadError(f"{path} YAML 解析失败: {exc}") from exc
 
 
+REGISTRY_TTL = Path("registry") / "services.ttl"
+REGISTRY_YAML = Path("registry") / "services.yaml"
+PLATFORM_YAML = Path("registry") / "platform.yaml"
+
+
 def load_registry(contracts_root: Path) -> dict[str, Any]:
-    """读契约仓的服务登记。"""
-    data = read_yaml(contracts_root / "registry" / "services.yaml")
+    """读契约仓的服务登记。
+
+    优先 ``services.ttl``（真源），其次 ``services.yaml``（兼容回退）。
+    与图无关的平台配置（版本钉、服务发现）在 ``platform.yaml``，合并进同一视图——
+    它们本来就不参与推理，没必要为了"单一格式"把版本号写成字面量三元组。
+    """
+    ttl_path = contracts_root / REGISTRY_TTL
+    if ttl_path.is_file():
+        from .registry_ttl import RegistryTTLError, parse_registry
+
+        try:
+            data = parse_registry(ttl_path)
+        except RegistryTTLError as exc:
+            raise LoadError(str(exc)) from exc
+        platform_path = contracts_root / PLATFORM_YAML
+        if platform_path.is_file():
+            config = read_yaml(platform_path) or {}
+            if isinstance(config, dict):
+                for key, value in config.items():
+                    if key != "schema":  # schema 以登记图自身的声明为准
+                        data.setdefault(key, value)
+        data.setdefault("services", [])
+        data.setdefault("libraries", [])
+        return data
+
+    yaml_path = contracts_root / REGISTRY_YAML
+    data = read_yaml(yaml_path)
     if not isinstance(data, dict):
-        raise LoadError("registry/services.yaml 顶层不是映射")
+        raise LoadError(f"{REGISTRY_YAML} 顶层不是映射")
     data.setdefault("services", [])
     data.setdefault("libraries", [])
     return data
