@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# CI 的目录布局与本地工作区不同：本地是 <ws>/rcp-ontology 与 <ws>/rcp-contracts 兄弟并列，
+# CI 是 <github.workspace>/rcp-contracts 内嵌。测试的默认路径按本地布局推导，因此这里
+# 用环境变量显式指定契约仓位置，避免两条判据在 CI 里错位成「契约文件不存在」。
+env:
+  RCP_ONTOLOGY: ${{ github.workspace }}
+  RCP_CONTRACTS: ${{ github.workspace }}/rcp-contracts
+  RCP_WORKSPACE: ${{ github.workspace }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
