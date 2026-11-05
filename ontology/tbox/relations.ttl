@@ -2,23 +2,19 @@
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-# 关系层真源（手写 TTL）。
+# ─────────────────────────────────────────────────────────────────────────────
+# 关系层：有哪些关系、属于哪张图、端点可以是什么种类。
 #
-# 为什么这一层是 TTL 而不是 YAML：本文件声明的是「关于关系的断言」，不是关系实例。
-#   rdfs:subPropertyOf / owl:domain / 图的归属 / 端点种类约束 —— 这些无法从任何
-#   key: value 属性推导出来，只能显式写成语义三元组。关系实例（谁 calls 谁）仍在
-#   rcp-contracts/registry/services.yaml，那是可评审的事实。
+# 声明的是「关于关系的断言」而不是关系实例：rdfs:subPropertyOf / 图归属 /
+# 端点种类约束无法从任何 key: value 推导，只能显式写成语义三元组。关系实例
+# （谁 calls 谁）在 abox/services.ttl，那是可评审的事实。
 #
 # 六张分域图的意义：环检测与可达性只在 rcp:reachability true 的图上计算。把部署、
-# 数据血缘、构建依赖混进调用图，E108/E109/E110 会立刻误报——这是分域的唯一目的。
+# 数据血缘、构建依赖混进调用图，E108/E109/E110 会立刻误报 —— 这是分域的唯一目的。
 #
-# 关系名即谓词 local name（rcp:calls → "calls"），不做大小写或连字符变换，
-# 保证 YAML 里写的关系名与 RDF 谓词一一对应，无需查表。
-
-# ---- 概念：关系与图 ----
-
-rcp:RelationKind  a owl:Class .
-rcp:RelationGraph a owl:Class .
+# 新增一条关系只改本文件：加一条 rcp:RelationKind、写 graph 与 status，参与可达性
+# 才加 rdfs:subPropertyOf rcp:dependsOn。不改代码、不改检查、不改 shapes。
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ---- 六张图 ----
 
@@ -60,7 +56,7 @@ rcp:GovernanceGraph a rcp:RelationGraph ;
 
 # ---- 调用图：唯一参与可达性的图 ----
 # 这几条一律 rdfs:subPropertyOf rcp:dependsOn：导出器会为它们同时产出 dependsOn
-# 汇总边，使 dependsOn+ 的推理与 SPARQL 路径闭包保持不变（见 exporter 说明）。
+# 汇总边，使 dependsOn+ 的推理与 SPARQL 路径闭包保持不变（见 semweb/exporter）。
 
 rcp:calls a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "calls" ;
@@ -69,7 +65,7 @@ rcp:calls a rcp:RelationKind, owl:ObjectProperty ;
     rdfs:subPropertyOf rcp:dependsOn ;
     rdfs:domain rcp:Service ;
     rcp:targetKind rcp:Service ;
-    rdfs:comment "同步 HTTP 调用（代码事实）。旧的 depends_on 字段等价于本关系。" .
+    rdfs:comment "同步 HTTP 调用（代码事实）。" .
 
 rcp:publishes a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "publishes" ;
@@ -95,7 +91,7 @@ rcp:queries a rcp:RelationKind, owl:ObjectProperty ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
     rcp:targetKind rcp:Service ;
-    rdfs:comment "经 dataway 的声明式查询。目标应为数据网关（已登记服务），而不是具体业务服务。" .
+    rdfs:comment "经 dataway 的声明式查询。目标应为数据网关，而不是具体业务服务。" .
 
 rcp:writes a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "writes" ;
@@ -133,7 +129,7 @@ rcp:exposes a rcp:RelationKind, owl:ObjectProperty ;
     rcp:graph rcp:ContractGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "对外暴露某份 OpenAPI 契约。等价于登记里的 contracts 字段。" .
+    rdfs:comment "对外暴露某份 OpenAPI 契约。等价于登记里的 rcp:contract 字段。" .
 
 rcp:consumes a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "consumes" ;
@@ -156,7 +152,7 @@ rcp:aligns_stack a rcp:RelationKind, owl:ObjectProperty ;
     rcp:graph rcp:BuildGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "对齐 baseline_stack 的版本基线。偏离即构建期风险。" .
+    rdfs:comment "对齐平台版本基线。偏离即构建期风险。" .
 
 # ---- 部署图 ----
 
@@ -195,4 +191,4 @@ rcp:waived_by a rcp:RelationKind, owl:ObjectProperty ;
     rcp:graph rcp:GovernanceGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "例外声明（expected / RL-007 例外）。必须带 reason、owner、review_by。" .
+    rdfs:comment "例外声明（expected / RL-007 例外）。必须带 reason、owner、reviewBy。" .

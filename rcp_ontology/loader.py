@@ -1,33 +1,41 @@
-"""本体仓：概念装载与结果类型。
+"""本体装载：目录即层，一个目录一个编辑面，全部是 TTL。
 
-TBox（概念/种类/能力/决策语义）在 ``concepts/tbox.ttl``，ABox（具体服务实例）在契约仓
-``registry/services.ttl``。本包只读，不写任何声明文件。
+本仓没有"唯一一种格式"，只有"每一层只有一个目录"：
 
-两支都是 TTL，所以"声明 → 图"不再有翻译步骤；这里仍提供字典视图，是因为检查逻辑
-（必填字段、图算法、渲染）建立在"实体 → 属性"上，改判会放大风险。视图在内存里生成，
-没有对应磁盘文件，不构成第二份真源。
+    ontology/tbox/     概念 —— 存在什么（种类、能力、决策、关系、术语）
+    ontology/abox/     实例 —— 本平台登记了什么（服务、库、边、平台配置）
+    ontology/policy/   规则 —— 什么算违规（红线与例外）
+    ontology/shapes/   约束 —— 图形状（SHACL）
 
-两种序列化各用各的严格性：
+装载器把一层目录下的全部 .ttl 合并成一张图（按文件名排序，保证确定性），再把图
+还原成检查层使用的字典视图。视图只在内存中存在，没有对应磁盘文件，所以不构成
+第二份真源。
 
-- YAML（只剩 platform.yaml / redlines.yaml 这类非图配置）：重复键视为解析失败，而不是
-  静默取后者。多人同时编辑同一份声明时，重复键会让"文件里写了什么"与"程序读到什么"
-  不一致，这类错误必须显式失败。
-- TTL：RDF 允许多值，所以功能属性（port/repo/owner/external/health、kind 的四个布尔、
-  决策分值、能力归属）的多值由 ``registry_ttl`` / ``concepts_ttl`` 在装载期报错——
-  这是同一条护栏在另一种格式上的等价实现。
+为什么仍然保留字典视图：检查逻辑（必填字段、图算法、渲染）建立在"实体 → 属性"上。
+让它们直接查图，改动面是全部 check 函数与图算法；只在这一层做一次"图 → 视图"
+的还原，检查层一行不改。
 
-``services.yaml`` 仍可读（兼容回退），``concepts/*.yaml`` 已随 TBox 迁移删除。
+严格性：RDF 允许一个属性多值，所以功能属性（port/repo/owner/external/health/
+artifact、kind 的四个布尔、决策分值、能力归属）的多值由 ``abox`` / ``tbox`` 在
+装载期显式报错 —— 这是原 YAML "重复键即失败"的等价护栏，不能因为换格式就丢掉。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from rdflib import Graph
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
+
+# 各层的目录名（相对本体仓根的 ontology/）。
+ONTOLOGY_DIR = "ontology"
+TBOX_DIR = "tbox"
+ABOX_DIR = "abox"
+POLICY_DIR = "policy"
+SHAPES_DIR = "shapes"
 
 # Finding 的作用域：
 #   declaration —— 只读单仓声明即可判定，任何环境都能跑
@@ -37,31 +45,7 @@ SCOPE_WORKSPACE = "workspace"
 
 
 class LoadError(RuntimeError):
-    """声明文件缺失或不可解析（含重复键）。"""
-
-
-class _StrictSafeLoader(yaml.SafeLoader):
-    """在 SafeLoader 上增加重复键检测。"""
-
-    def construct_mapping(self, node, deep=False):  # type: ignore[override]
-        if isinstance(node, yaml.MappingNode):
-            self.flatten_mapping(node)
-        seen: set[Any] = set()
-        for key_node, _value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            try:
-                duplicate = key in seen
-                seen.add(key)
-            except TypeError:  # 不可哈希的键交给后续构造去报错
-                continue
-            if duplicate:
-                raise yaml.constructor.ConstructorError(
-                    None,
-                    None,
-                    f"重复键 {key!r}",
-                    key_node.start_mark,
-                )
-        return super().construct_mapping(node, deep=deep)
+    """声明不可用（文件缺失、TTL 语法错误、功能属性多值、顶层结构不符）。"""
 
 
 @dataclass(frozen=True)
@@ -82,91 +66,110 @@ class Finding:
         }
 
 
-def read_yaml(path: Path) -> Any:
-    if not path.is_file():
-        raise LoadError(f"文件不存在: {path}")
-    try:
-        with path.open(encoding="utf-8") as handle:
-            return yaml.load(handle, Loader=_StrictSafeLoader)
-    except yaml.MarkedYAMLError as exc:
-        where = ""
-        if exc.problem_mark is not None:
-            where = f"（第 {exc.problem_mark.line + 1} 行）"
-        raise LoadError(f"{path} YAML 解析失败{where}: {exc.problem}") from exc
-    except yaml.YAMLError as exc:
-        raise LoadError(f"{path} YAML 解析失败: {exc}") from exc
+@dataclass
+class Ontology:
+    """本体仓的装载结果（一份只读快照）。"""
+
+    root: Path
+    graph: dict[str, Graph] = field(default_factory=dict)
 
 
-REGISTRY_TTL = Path("registry") / "services.ttl"
-REGISTRY_YAML = Path("registry") / "services.yaml"
-PLATFORM_YAML = Path("registry") / "platform.yaml"
+def ontology_root(root: Path) -> Path:
+    """接受本体仓根或 ontology/ 目录本身，统一成 ontology/ 目录。"""
+    root = Path(root)
+    if (root / ONTOLOGY_DIR).is_dir():
+        return root / ONTOLOGY_DIR
+    return root
 
 
-def load_registry(contracts_root: Path) -> dict[str, Any]:
-    """读契约仓的服务登记。
+def layer_dir(root: Path, layer: str) -> Path:
+    """取某一层的目录；缺失即声明不可用（不静默回退到别的层）。"""
+    path = ontology_root(root) / layer
+    if not path.is_dir():
+        raise LoadError(f"缺少本体层目录: {path}")
+    return path
 
-    优先 ``services.ttl``（真源），其次 ``services.yaml``（兼容回退）。
-    与图无关的平台配置（版本钉、服务发现）在 ``platform.yaml``，合并进同一视图——
-    它们本来就不参与推理，没必要为了"单一格式"把版本号写成字面量三元组。
+
+def parse_layer(root: Path, layer: str) -> tuple[Graph, list[Path]]:
+    """把一层的全部 .ttl 合并成一张图。
+
+    合并顺序为文件名字典序 —— RDF 图无序，但解析顺序影响错误报告与空白节点编号，
+    固定下来才能让同一份声明每次产出相同结论。
     """
-    ttl_path = contracts_root / REGISTRY_TTL
-    if ttl_path.is_file():
-        from .registry_ttl import RegistryTTLError, parse_registry
-
+    directory = layer_dir(root, layer)
+    files = sorted(directory.glob("*.ttl"))
+    if not files:
+        raise LoadError(f"{directory} 下没有任何 .ttl 声明")
+    graph = Graph()
+    for path in files:
         try:
-            data = parse_registry(ttl_path)
-        except RegistryTTLError as exc:
-            raise LoadError(str(exc)) from exc
-        platform_path = contracts_root / PLATFORM_YAML
-        if platform_path.is_file():
-            config = read_yaml(platform_path) or {}
-            if isinstance(config, dict):
-                for key, value in config.items():
-                    if key != "schema":  # schema 以登记图自身的声明为准
-                        data.setdefault(key, value)
-        data.setdefault("services", [])
-        data.setdefault("libraries", [])
-        return data
+            graph.parse(path, format="turtle")
+        except Exception as exc:  # noqa: BLE001 - 语法错误即声明不可用
+            raise LoadError(f"{path} TTL 解析失败: {exc}") from exc
+    return graph, files
 
-    yaml_path = contracts_root / REGISTRY_YAML
-    data = read_yaml(yaml_path)
-    if not isinstance(data, dict):
-        raise LoadError(f"{REGISTRY_YAML} 顶层不是映射")
+
+def load_registry(root: Path) -> dict[str, Any]:
+    """读 ABox 层（abox/）：服务、库、边、预期状态、平台配置。
+
+    返回值是检查层使用的字典视图：``services`` / ``libraries`` 两个列表，
+    外加平台配置的扁平键（``platform`` / ``schema`` / ``updated`` /
+    ``baseline_stack`` / ``discovery``）。
+    """
+    from .abox import AboxError, parse_abox
+
+    graph, files = parse_layer(root, ABOX_DIR)
+    try:
+        data = parse_abox(graph, ", ".join(p.name for p in files))
+    except AboxError as exc:
+        raise LoadError(str(exc)) from exc
     data.setdefault("services", [])
     data.setdefault("libraries", [])
     return data
 
 
-def load_concepts(concepts_dir: Path) -> dict[str, Any]:
-    """读 TBox（``concepts/tbox.ttl``）。
+def load_concepts(root: Path) -> dict[str, Any]:
+    """读 TBox 层（tbox/）：种类、能力、决策、术语，并附上原图。
 
-    返回的字典是内存视图：除三个列表外还带 ``tbox_graph``（原图），供导出与 SHACL
-    验证直接使用，避免再从字典反向合成一遍相同的三元组。
+    原图一并返回，是因为导出与 SHACL 验证需要 TBox 的三元组本身（类声明、行为属性、
+    能力与决策个体）—— 有了它，导出器不必再从字典反向合成一遍同样的三元组。
     """
-    from .concepts_ttl import TBOX_FILE, ConceptsTTLError, parse_concepts
+    from .tbox import TboxError, parse_tbox
 
-    path = concepts_dir / TBOX_FILE
-    if not path.is_file():
-        raise LoadError(f"TBox 文件不存在: {path}")
+    graph, files = parse_layer(root, TBOX_DIR)
     try:
-        data, graph = parse_concepts(path)
-    except ConceptsTTLError as exc:
+        data = parse_tbox(graph, ", ".join(p.name for p in files))
+    except TboxError as exc:
         raise LoadError(str(exc)) from exc
     data["tbox_graph"] = graph
     return data
 
 
-def load_redlines(contracts_root: Path) -> dict[str, Any]:
-    """读契约仓的架构红线与例外登记。"""
-    data = read_yaml(contracts_root / "ontology" / "constraints" / "redlines.yaml")
-    if not isinstance(data, dict):
-        raise LoadError("ontology/constraints/redlines.yaml 顶层不是映射")
+def load_relations(root: Path) -> dict[str, Any]:
+    """读关系层（tbox/relations.ttl 的三元组）。
+
+    关系声明与概念同层，所以走同一张合并图；本函数只做筛选，不重复解析文件。
+    """
+    from .relations import parse_relations
+
+    graph, files = parse_layer(root, TBOX_DIR)
+    try:
+        return parse_relations(graph, ", ".join(p.name for p in files))
+    except ValueError as exc:
+        # 关系层不可用不是加载致命错误：调用方据此降级并输出 S002，
+        # 而不是让 impact/relations 这类命令直接崩掉。
+        raise LoadError(str(exc)) from exc
+
+
+def load_redlines(root: Path) -> dict[str, Any]:
+    """读规则层（policy/）：红线与例外。"""
+    from .policy import PolicyError, parse_redlines
+
+    graph, files = parse_layer(root, POLICY_DIR)
+    try:
+        data = parse_redlines(graph, ", ".join(p.name for p in files))
+    except PolicyError as exc:
+        raise LoadError(str(exc)) from exc
     data.setdefault("constraints", [])
     data.setdefault("exceptions", [])
     return data
-
-
-def load_decision_schema(contracts_root: Path, field: str = "enum") -> list[str]:
-    """读契约层的决策枚举（真源之一）。字段名可参数化（缺省 enum）。"""
-    data = read_yaml(contracts_root / "contracts" / "schemas" / "decision.yaml") or {}
-    return list(data.get(field, []))

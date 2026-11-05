@@ -1,0 +1,80 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 种类（kind）。
+#
+# 每种 kind 同时是 owl:Class（登记里用 rdf:type 归类，SHACL 的 sh:targetClass
+# 直接命中）与 rcp:Kind 实例（承载行为属性）。
+#
+# 五个行为属性的口径 —— 检查器按属性判，不在代码里硬编码种类名：
+#   rcp:mustBeExternal   是否必须 external=true（RL-002）
+#   rcp:isEntry          是否为图上入口，允许入度为 0（E109）
+#   rcp:requiresPort     是否必须有 port（E001；元仓为 false）
+#   rcp:requiresContract 是否必须挂 OpenAPI（RL-006；前端与元仓为 false）
+#   rcp:allowsDependsOn  允许依赖的种类白名单，不写 = 零依赖（E106 / RL-001）
+#
+# 约定：
+#   1. 五个属性必须显式写全，缺一个即 E113 —— 缺省补默认会让检查行为静默退化。
+#   2. kind 名由类名转 kebab（PatrolLine → patrol-line），与登记里的 kind 字面值同一套
+#      归一规则，装载器据此还原，不另写 rcp:name。
+#   3. 新增种类只改本文件：类型、白名单、端口与契约要求随之生效，无需改 Python。
+# ─────────────────────────────────────────────────────────────────────────────
+
+rcp:Gateway a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "网关" ;
+    rcp:definition "平台对外唯一 HTTP 入口，负责幂等、路由、分级处置与降级。" ;
+    rcp:mustBeExternal true ;
+    rcp:isEntry true ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true ;
+    rcp:allowsDependsOn rcp:PatrolLine, rcp:DataGateway, rcp:DbOps .
+
+rcp:PatrolLine a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "巡查线" ;
+    rcp:definition "按业务域切分的风控判定单元，必须可独立部署、独立降级。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry false ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true .
+
+rcp:DataGateway a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "数据网关" ;
+    rcp:definition "业务服务访问数据库的唯一出口，只接受声明式查询与模板化写入。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry false ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true .
+
+rcp:DbOps a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "数据库操作服务" ;
+    rcp:definition "版本化 DDL 的唯一执行者，负责迁移执行、台账与回滚。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry false ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true .
+
+rcp:Frontend a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "前端" ;
+    rcp:definition "运营控制台，只经 api-gateway 访问后端，不得直连任何裸服务。" ;
+    rcp:mustBeExternal true ;
+    rcp:isEntry true ;
+    rcp:requiresPort true ;
+    rcp:requiresContract false ;
+    rcp:allowsDependsOn rcp:Gateway .
+
+# 元仓不是服务：不挂 rdfs:subClassOf rcp:Service，登记里也不写 rcp:Service 类型，
+# 否则 port 必填的形状会误报它缺端口。
+rcp:Meta a owl:Class, rcp:Kind ;
+    rdfs:label "元仓" ;
+    rcp:definition "不参与运行时数据面的元仓：契约声明、本体检查工具、迁移与部署清单。无 HTTP 端口、不部署为服务、不挂 OpenAPI 契约，但必须有 owner 与登记。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry true ;
+    rcp:requiresPort false ;
+    rcp:requiresContract false .

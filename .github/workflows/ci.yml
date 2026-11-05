@@ -5,17 +5,27 @@ on:
     branches: [main]
   pull_request:
 
+# CI 的目录布局与本地工作区不同：本地是 <ws>/rcp-ontology 与 <ws>/rcp-contracts 兄弟并列，
+# CI 是 <github.workspace>/rcp-contracts 内嵌。测试的默认路径按本地布局推导，因此这里
+# 用环境变量显式指定契约仓位置，避免两条判据在 CI 里错位成「契约文件不存在」。
+env:
+  RCP_ONTOLOGY: ${{ github.workspace }}
+  RCP_CONTRACTS: ${{ github.workspace }}/rcp-contracts
+  RCP_WORKSPACE: ${{ github.workspace }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # 契约仓只提供 OpenAPI 与生成的决策 schema；声明真源在本仓 ontology/。
+      # 单仓 CI 里 RL-003 的 rcp-core 对端不在，检查器会输出 S003 说明未比对。
       - name: 检出契约仓
         uses: actions/checkout@v4
         with:
           repository: lifeipkg/rcp-contracts
-          path: .deps/rcp-contracts
+          path: rcp-contracts
 
       - uses: actions/setup-python@v5
         with:
@@ -28,4 +38,4 @@ jobs:
         run: python -m pytest -q
 
       - name: 一致性检查
-        run: python rcp_ontology/cli.py check --contracts .deps/rcp-contracts
+        run: python rcp_ontology/cli.py check --contracts rcp-contracts

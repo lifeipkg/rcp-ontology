@@ -1,15 +1,26 @@
 """本体检查器 CLI。
 
-用法（文件路径直接执行或 -m 均可）：
-    python rcp_ontology/cli.py check --contracts ../rcp-contracts [--workspace .] [--json] [--baseline origin/main] [--checker-ref HEAD~1]
-    python rcp_ontology/cli.py render --contracts ../rcp-contracts --out SERVICES.md
-    python rcp_ontology/cli.py impact --contracts ../rcp-contracts --service dataway
-    python rcp_ontology/cli.py owners --contracts ../rcp-contracts [--out .github/CODEOWNERS]
+真源是本仓 ``ontology/`` 下的 TTL，因此 ``--ontology`` 是主参数（缺省即本仓）。
+契约仓只提供 OpenAPI 与生成物，用 ``--contracts`` 定位，且只有 check/render-schema 需要。
 
-语义网层（RDF / OWL / SHACL / SPARQL，双轨对照，不改 YAML 真源）：
-    python rcp_ontology/cli.py export --contracts ../rcp-contracts --out services.ttl
-    python rcp_ontology/cli.py shacl  --contracts ../rcp-contracts
-    python rcp_ontology/cli.py sparql --contracts ../rcp-contracts --service dataway
+用法：
+    # 一致性检查（-w 指多仓工作区根；不给则跨仓判定输出 S001 明示跳过）
+    python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. [--json]
+    python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. --baseline origin/main
+
+    # 因改声明而受影响的服务
+    python rcp_ontology/cli.py impact --service dataway [--graph data]
+    python rcp_ontology/cli.py relations
+    python rcp_ontology/cli.py owners --org your-org --out .github/CODEOWNERS
+    python rcp_ontology/cli.py render --out SERVICES.md
+
+    # 语义网层（RDF / OWL / SHACL / SPARQL）
+    python rcp_ontology/cli.py export --out /tmp/services.ttl
+    python rcp_ontology/cli.py shacl
+    python rcp_ontology/cli.py sparql --service dataway
+
+    # 派生：由 tbox/decisions.ttl 生成 contracts/schemas/decision.yaml（勿手改生成物）
+    python rcp_ontology/cli.py render-schema --contracts ../rcp-contracts --out ../rcp-contracts/contracts/schemas/decision.yaml
 """
 
 from __future__ import annotations
@@ -35,12 +46,9 @@ from rcp_ontology.loader import (  # noqa: E402
     LoadError,
     load_concepts,
     load_registry,
-)
-from rcp_ontology.relations import (  # noqa: E402
-    iter_edges,
     load_relations,
-    service_relations,
 )
+from rcp_ontology.relations import iter_edges, service_relations  # noqa: E402
 
 LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 
@@ -53,22 +61,34 @@ def _fmt(finding) -> str:
     return f"[{finding.level.upper():5}] {tag}{finding.code}: {finding.message}"
 
 
-def _load_declarations(args: argparse.Namespace):
-    """读三份真源：登记（YAML）、概念（YAML）、关系与公理（TTL）。
+def _ontology_root(args: argparse.Namespace) -> Path:
+    """本体仓根：--ontology 给出则用它，否则用本仓。"""
+    raw = getattr(args, "ontology", None)
+    return Path(raw).resolve() if raw else ONTOLOGY_ROOT
 
-    关系层缺文件不致命：返回 None，由检查器输出 S002 明示"关系级判定未执行"，
+
+def _contracts_root(args: argparse.Namespace) -> Path | None:
+    raw = getattr(args, "contracts", None)
+    return Path(raw).resolve() if raw else None
+
+
+def _load_declarations(args: argparse.Namespace):
+    """读三层真源：ABox（登记）、TBox（概念）、关系与公理。
+
+    全部来自本仓 ontology/ 目录下的 TTL —— 没有 YAML，也没有第二处真源。
+
+    关系层不可用不致命：返回 None，由检查器输出 S002 明示"关系级判定未执行"，
     而不是让命令直接失败——这与「不可判就明说跳过」的约定一致。
     """
-    contracts = Path(args.contracts).resolve()
-    concepts_dir = Path(args.concepts).resolve() if getattr(args, "concepts", None) else ONTOLOGY_ROOT / "concepts"
-    registry = load_registry(contracts)
-    concepts = load_concepts(concepts_dir)
+    root = _ontology_root(args)
+    registry = load_registry(root)
+    concepts = load_concepts(root)
     try:
-        relations = load_relations(concepts_dir.parent / "ontology")
+        relations = load_relations(root)
     except LoadError as exc:
         print(f"[rcp-ontology] 关系层不可用，关系级判定跳过: {exc}", file=sys.stderr)
         relations = None
-    return registry, concepts, relations, contracts
+    return registry, concepts, relations, root
 
 
 def _extract_repo_at(repo: Path, ref: str) -> Path:
@@ -93,15 +113,15 @@ def _extract_repo_at(repo: Path, ref: str) -> Path:
     return tmpdir
 
 
-def _run_historical_check(checker_dir: Path, contracts_dir: Path) -> list[Finding]:
-    """用 checker_dir 里的历史检查器跑 contracts_dir，返回其声明层结论。
+def _run_historical_check(checker_dir: Path, ontology_dir: Path) -> list[Finding]:
+    """用 checker_dir 里的历史检查器跑 ontology_dir，返回其声明层结论。
 
     历史检查器作为独立进程运行（subprocess），完全隔离当前代码与历史代码，
     避免模块缓存/依赖串扰。退出码 0（闭合）与 1（有 error）都算成功产出结论。
     """
     cli = checker_dir / "rcp_ontology" / "cli.py"
     result = subprocess.run(
-        [sys.executable, str(cli), "check", "--contracts", str(contracts_dir), "--json"],
+        [sys.executable, str(cli), "check", "--ontology", str(ontology_dir), "--json"],
         capture_output=True,
         text=True,
     )
@@ -141,16 +161,17 @@ def _fmt_drift_line(tag: str, entry: tuple[str, str, str]) -> str:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    contracts = Path(args.contracts).resolve()
-    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
-    workspace = Path(args.workspace).resolve() if args.workspace else None
+    ontology = _ontology_root(args)
+    contracts = _contracts_root(args)
+    workspace = Path(args.workspace).resolve() if args.workspace else ontology.parent
 
     # 先解析基线快照（若给），失败即输入错误，不产出半截结论。
+    # 基线的对象是**本体仓**：真源搬了家，历史声明在 git 里也跟着搬。
     baseline_dir: Path | None = None
     checker_dir: Path | None = None
     if args.baseline:
         try:
-            baseline_dir = _extract_repo_at(contracts, args.baseline)
+            baseline_dir = _extract_repo_at(ontology, args.baseline)
             if args.checker_ref:
                 checker_dir = _extract_repo_at(ONTOLOGY_ROOT, args.checker_ref)
         except RuntimeError as exc:
@@ -162,7 +183,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             return 2
 
     try:
-        findings = check_all(contracts, concepts_dir, workspace)
+        findings = check_all(ontology, contracts, workspace)
     except LoadError as exc:
         if baseline_dir:
             shutil.rmtree(baseline_dir, ignore_errors=True)
@@ -173,7 +194,6 @@ def cmd_check(args: argparse.Namespace) -> int:
     errors = [f for f in findings if f.level == "error"]
     warns = [f for f in findings if f.level == "warn"]
     infos = [f for f in findings if f.level == "info"]
-    cross_repo_skipped = [f for f in infos if f.code == "S001"]
 
     # 架构熵漂移（--baseline）：基线声明层结论 vs 当前声明层结论的差集。
     # 缺省用当前规则衡量基线（单一规则视角）；给 --checker-ref 则用该版本历史规则
@@ -184,7 +204,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             if checker_dir is not None:
                 baseline_findings = _run_historical_check(checker_dir, baseline_dir)
             else:
-                baseline_findings = check_declarations(baseline_dir, concepts_dir)
+                baseline_findings = check_declarations(baseline_dir, contracts, workspace)
             drift = diff_findings(
                 _decl_entropy(baseline_findings), _decl_entropy(findings)
             )
@@ -199,8 +219,9 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     if args.json:
         payload = {
-            "contracts": str(contracts),
-            "workspace": str(workspace or contracts.parent),
+            "ontology": str(ontology),
+            "contracts": str(contracts) if contracts else None,
+            "workspace": str(workspace),
             "errors": [f.as_dict() for f in errors],
             "warnings": [f.as_dict() for f in warns],
             "skipped": [f.as_dict() for f in infos],
@@ -246,20 +267,22 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     if errors:
         return 1
-    if args.require_workspace and cross_repo_skipped:
-        print("[rcp-ontology] --require-workspace：跨仓检查不完整，视为失败", file=sys.stderr)
-        return 2
+    if args.require_workspace:
+        blocked = [f for f in infos if f.code in {"S001", "S003", "S004"}]
+        if blocked:
+            print(
+                "[rcp-ontology] --require-workspace：存在未执行的跨仓/跨源判定，视为失败",
+                file=sys.stderr,
+            )
+            return 2
     return 0
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    contracts = Path(args.contracts).resolve()
-    concepts_dir = Path(args.concepts).resolve() if args.concepts else None
+    root = _ontology_root(args)
     try:
-        registry = load_registry(contracts)
-        concepts = load_concepts(
-            concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
-        )
+        registry = load_registry(root)
+        concepts = load_concepts(root)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -304,7 +327,7 @@ def cmd_render(args: argparse.Namespace) -> int:
 def cmd_impact(args: argparse.Namespace) -> int:
     """改一个服务之前，先看它会波及谁。--graph 选择在哪个域上算闭包。"""
     try:
-        registry, _concepts, relations, _contracts = _load_declarations(args)
+        registry, _concepts, relations, _root = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -355,7 +378,7 @@ def cmd_relations(args: argparse.Namespace) -> int:
     已生效的判定。--json 供外部消费（例如生成架构文档）。
     """
     try:
-        registry, _concepts, relations, _contracts = _load_declarations(args)
+        registry, _concepts, relations, _root = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -392,10 +415,9 @@ def cmd_relations(args: argparse.Namespace) -> int:
 
 
 def cmd_owners(args: argparse.Namespace) -> int:
-    """按 registry 的 owner 生成 CODEOWNERS，让归属真正落到审批上。"""
-    contracts = Path(args.contracts).resolve()
+    """按 abox 的 owner 生成 CODEOWNERS，让归属真正落到审批上。"""
     try:
-        registry = load_registry(contracts)
+        registry = load_registry(_ontology_root(args))
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -414,7 +436,7 @@ def cmd_owners(args: argparse.Namespace) -> int:
         return f"@{args.org}/{owner}" if args.org else f"@{owner}"
 
     lines = [
-        "# 由 rcp-ontology owners 生成，勿手改 —— 真源是 rcp-contracts/registry/services.ttl",
+        "# 由 rcp-ontology owners 生成，勿手改 —— 真源是 rcp-ontology/ontology/abox/services.ttl",
         "# 每行 handle 必须是 GitHub 上真实存在的用户或团队 slug。",
         "",
     ]
@@ -439,7 +461,7 @@ def cmd_owners(args: argparse.Namespace) -> int:
 def cmd_export(args: argparse.Namespace) -> int:
     """L1 导出：声明 → RDF/Turtle。真源仍是 YAML 事实 + TTL 关系公理，RDF 是图形态。"""
     try:
-        registry, concepts, relations, _contracts = _load_declarations(args)
+        registry, concepts, relations, _root = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -459,7 +481,7 @@ def cmd_export(args: argparse.Namespace) -> int:
 def cmd_shacl(args: argparse.Namespace) -> int:
     """L3 验证：对导出的 RDF 图跑 SHACL 约束（静态 + 动态 shapes）。"""
     try:
-        registry, concepts, relations, _contracts = _load_declarations(args)
+        registry, concepts, relations, _root = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -467,7 +489,7 @@ def cmd_shacl(args: argparse.Namespace) -> int:
     from rcp_ontology.semweb import build_rdf, validate_all
 
     graph = build_rdf(registry, concepts, relations)
-    shapes = ONTOLOGY_ROOT / "ontology" / "constraints.ttl"
+    shapes = _ontology_root(args) / "ontology" / "shapes" / "core.ttl"
     conforms, findings = validate_all(graph, shapes, concepts)
 
     if args.json:
@@ -488,7 +510,7 @@ def cmd_shacl(args: argparse.Namespace) -> int:
 def cmd_sparql(args: argparse.Namespace) -> int:
     """L4 查询：SPARQL 属性路径（dependsOn+）算依赖闭包，对照 impact 命令。"""
     try:
-        registry, concepts, relations, _contracts = _load_declarations(args)
+        registry, concepts, relations, _root = _load_declarations(args)
     except LoadError as exc:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
@@ -517,20 +539,79 @@ def cmd_sparql(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_render_schema(args: argparse.Namespace) -> int:
+    """由 tbox/decisions.ttl 生成 contracts/schemas/decision.yaml。
+
+    生成物不是真源：它是契约层（OpenAPI / 其它 schema）能 $ref 到的机器可读形态，
+    真源始终是 decisions.ttl。手工拼串而不是 yaml.safe_dump，是为了让产物稳定可 diff
+    —— 生成物的价值在于"改了真源才变"，任何额外波动都会掩盖真正的改动。
+    """
+    root = _ontology_root(args)
+    contracts = _contracts_root(args)
+    try:
+        concepts = load_concepts(root)
+    except LoadError as exc:
+        print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
+        return 2
+
+    decisions = concepts.get("decisions") or []
+    if not decisions:
+        print("[rcp-ontology] decisions.ttl 里没有决策等级", file=sys.stderr)
+        return 2
+
+    lines = [
+        "schema: rcp.contract.schema/v1",
+        "name: Decision",
+        "zh: 决策等级",
+        "type: string",
+        "# 生成物，勿手改：由 rcp-ontology 的 `cli.py render-schema` 从",
+        "# rcp-ontology/ontology/tbox/decisions.ttl 产出。改真源后重跑命令。",
+        "description: 处置等级枚举，唯一真源为 rcp-ontology/ontology/tbox/decisions.ttl。分值见 rcp:baseScore。",
+        "enum:",
+    ]
+    lines += [f"  - {d['code']}" for d in decisions]
+    lines.append("x-base-score:")
+    lines += [f"  {d['code']}: {d['base_score']}" for d in decisions]
+    text = "\n".join(lines) + "\n"
+
+    target = Path(args.out) if args.out else None
+    if target is None:
+        if contracts is None:
+            print("[rcp-ontology] 需要 --out 或 --contracts 才能确定输出路径", file=sys.stderr)
+            return 2
+        target = contracts / "contracts" / "schemas" / "decision.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    print(f"已生成: {target}（{len(decisions)} 个决策等级）")
+    return 0
+
+
+def _add_common(parser: argparse.ArgumentParser, *, contracts: bool = False) -> None:
+    """给子命令挂共通参数：--ontology 是主入口，--contracts 只有需要契约文件时才挂。"""
+    parser.add_argument(
+        "--ontology",
+        help="本体仓根或 ontology/ 目录，缺省即本仓（真源所在）",
+    )
+    if contracts:
+        parser.add_argument(
+            "--contracts",
+            help="契约仓根目录：只用于定位 OpenAPI 与生成物，不给则相关判定输出 S004 跳过",
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rcp-ontology", description="风控平台本体检查器")
     sub = parser.add_subparsers(dest="command", required=True)
 
     check = sub.add_parser("check", help="登记/契约/红线/图 一致性检查")
-    check.add_argument("--contracts", required=True, help="契约仓根目录")
-    check.add_argument("--concepts", help="TBox 目录，缺省为本仓 concepts/")
+    _add_common(check, contracts=True)
     check.add_argument(
-        "--workspace",
-        help="多仓工作区根，用于仓布局级红线（RL-004/005/007）与 E107；缺省取契约仓父目录",
+        "-w", "--workspace",
+        help="多仓工作区根，用于仓布局级红线（RL-004/005/007）与 E107；缺省取本体仓父目录",
     )
     check.add_argument(
         "--baseline",
-        help="git 基线（如 HEAD~1 / origin/main），给出则追加架构熵漂移对比（声明层 error/warn 差集）",
+        help="本体仓的 git 基线（如 HEAD~1 / origin/main），给出则追加架构熵漂移对比",
     )
     check.add_argument(
         "--checker-ref",
@@ -540,21 +621,19 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--require-workspace",
         action="store_true",
-        help="要求跨仓检查必须完整执行；不完整时退出码 2（CI 用，防假绿灯）",
+        help="要求跨仓/跨源判定必须完整执行；有 S001/S003/S004 时退出码 2（CI 用，防假绿灯）",
     )
     check.add_argument("--json", action="store_true", help="输出 JSON")
     check.set_defaults(func=cmd_check)
 
     render = sub.add_parser("render", help="渲染服务目录 Markdown")
-    render.add_argument("--contracts", required=True, help="契约仓根目录")
-    render.add_argument("--concepts", help="TBox 目录")
+    _add_common(render)
     render.add_argument("--out", help="输出文件，缺省打印")
     render.set_defaults(func=cmd_render)
 
     impact = sub.add_parser("impact", help="查一个服务的依赖与被依赖闭包")
-    impact.add_argument("--contracts", required=True, help="契约仓根目录")
-    impact.add_argument("--concepts", help="TBox 目录")
-    impact.add_argument("--service", required=True, help="服务名（registry 里的 name）")
+    _add_common(impact)
+    impact.add_argument("--service", required=True, help="服务名（abox 里的实例 local name）")
     impact.add_argument(
         "--graph",
         default="call",
@@ -564,35 +643,39 @@ def build_parser() -> argparse.ArgumentParser:
     impact.set_defaults(func=cmd_impact)
 
     relations = sub.add_parser("relations", help="列出关系类型、所属图与实例数")
-    relations.add_argument("--contracts", required=True, help="契约仓根目录")
-    relations.add_argument("--concepts", help="TBox 目录")
+    _add_common(relations)
     relations.add_argument("--json", action="store_true", help="输出 JSON")
     relations.set_defaults(func=cmd_relations)
 
     owners = sub.add_parser("owners", help="按 owner 生成 CODEOWNERS")
-    owners.add_argument("--contracts", required=True, help="契约仓根目录")
+    _add_common(owners)
     owners.add_argument("--org", help="GitHub 组织名，给出时生成 @org/team 形式")
     owners.add_argument("--out", help="输出文件，缺省打印")
     owners.set_defaults(func=cmd_owners)
 
-    export = sub.add_parser("export", help="把 YAML 声明导出为 RDF/Turtle（语义网层 L1）")
-    export.add_argument("--contracts", required=True, help="契约仓根目录")
-    export.add_argument("--concepts", help="TBox 目录")
+    export = sub.add_parser("export", help="把声明图导出为 RDF/Turtle（语义网层 L1）")
+    _add_common(export)
     export.add_argument("--out", help="输出 Turtle 文件，缺省打印到 stdout")
     export.set_defaults(func=cmd_export)
 
     shacl = sub.add_parser("shacl", help="用 SHACL shapes 验证导出的 RDF 图（语义网层 L3）")
-    shacl.add_argument("--contracts", required=True, help="契约仓根目录")
-    shacl.add_argument("--concepts", help="TBox 目录")
+    _add_common(shacl)
     shacl.add_argument("--json", action="store_true", help="输出 JSON")
     shacl.set_defaults(func=cmd_shacl)
 
     sparql = sub.add_parser("sparql", help="用 SPARQL 属性路径查依赖闭包（语义网层 L4）")
-    sparql.add_argument("--contracts", required=True, help="契约仓根目录")
-    sparql.add_argument("--concepts", help="TBox 目录")
-    sparql.add_argument("--service", required=True, help="服务名（registry 里的 name）")
+    _add_common(sparql)
+    sparql.add_argument("--service", required=True, help="服务名（abox 里的实例 local name）")
     sparql.add_argument("--json", action="store_true", help="输出 JSON")
     sparql.set_defaults(func=cmd_sparql)
+
+    schema = sub.add_parser(
+        "render-schema",
+        help="由 tbox/decisions.ttl 生成 contracts/schemas/decision.yaml（生成物，勿手改）",
+    )
+    _add_common(schema, contracts=True)
+    schema.add_argument("--out", help="输出路径；缺省 <contracts>/contracts/schemas/decision.yaml")
+    schema.set_defaults(func=cmd_render_schema)
 
     return parser
 

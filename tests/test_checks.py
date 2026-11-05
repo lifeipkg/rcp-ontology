@@ -30,7 +30,7 @@ from rcp_ontology.layout import (
     run_registry_scan,
     run_upstream_scan,
 )
-from rcp_ontology.loader import Finding, LoadError, SCOPE_DECLARATION, SCOPE_WORKSPACE, read_yaml
+from rcp_ontology.loader import Finding, LoadError, SCOPE_DECLARATION, SCOPE_WORKSPACE
 
 CONCEPTS = {
     "kinds": [
@@ -145,37 +145,145 @@ def test_frontend_without_contracts_is_fine(tmp_path: Path):
     assert check_contracts_exist(tmp_path, {"services": [web]}, CONCEPTS) == []
 
 
-def test_decision_enum_drift_detected(tmp_path: Path):
-    schemas = tmp_path / "contracts" / "schemas"
-    schemas.mkdir(parents=True)
-    (schemas / "decision.yaml").write_text(
-        yaml.safe_dump({"enum": ["PASS", "WARN", "INTERCEPT"]}), encoding="utf-8"
+DECISION_SPEC = {
+    "source": [
+        "ontology/tbox/decisions.ttl",
+        "rcp-core/src/main/java/com/risk/platform/model/Decision.java",
+        "contracts/schemas/decision.yaml",
+    ]
+}
+
+_JAVA = """public enum Decision {{
+{consts};
+
+    public int baseScore() {{
+        return switch (this) {{
+{cases}
+        }};
+    }}
+}}
+"""
+
+
+def _java_decisions(pairs: list[tuple[str, int]]) -> str:
+    return _JAVA.format(
+        consts=",\n".join(f"    {code}" for code, _ in pairs),
+        cases="\n".join(f"            case {code} -> {score};" for code, score in pairs),
     )
-    findings = check_decision_alignment(tmp_path, CONCEPTS)
-    assert "RL-003" in codes(findings)
 
 
-def test_decision_enum_aligned(tmp_path: Path):
-    schemas = tmp_path / "contracts" / "schemas"
-    schemas.mkdir(parents=True)
-    (schemas / "decision.yaml").write_text(
-        yaml.safe_dump({"enum": ["PASS", "INTERCEPT"]}), encoding="utf-8"
+def _workspace_with(tmp_path: Path, *, java: str | None = None, schema: dict | None = None) -> Path:
+    """构造工作区：真源在 CONCEPTS 里，对端落盘为 Java 与生成物 YAML。"""
+    src = tmp_path / "rcp-core" / "src" / "main" / "java" / "com" / "risk" / "platform" / "model"
+    src.mkdir(parents=True)
+    (src / "Decision.java").write_text(
+        java if java is not None else _java_decisions([("PASS", 0), ("INTERCEPT", 80)]),
+        encoding="utf-8",
     )
-    assert check_decision_alignment(tmp_path, CONCEPTS) == []
-
-
-def test_decision_score_drift_detected(tmp_path: Path):
-    """枚举一致但分值漂移，同样要红——分值决定处置档位，不能只比名字。"""
     schemas = tmp_path / "contracts" / "schemas"
     schemas.mkdir(parents=True)
     (schemas / "decision.yaml").write_text(
         yaml.safe_dump(
-            {"enum": ["PASS", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 99}}
+            schema if schema is not None
+            else {"enum": ["PASS", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 80}}
         ),
         encoding="utf-8",
     )
-    findings = check_decision_alignment(tmp_path, CONCEPTS)
-    assert "RL-003" in codes(findings)
+    return tmp_path
+
+
+def test_decision_aligned_across_three_sources(tmp_path: Path):
+    workspace = _workspace_with(tmp_path)
+    assert check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace) == []
+
+
+DECISION_SPEC = {
+    "source": [
+        "ontology/tbox/decisions.ttl",
+        "rcp-core/src/main/java/com/risk/platform/model/Decision.java",
+        "contracts/schemas/decision.yaml",
+    ]
+}
+
+_JAVA = """public enum Decision {{
+{consts};
+
+    public int baseScore() {{
+        return switch (this) {{
+{cases}
+        }};
+    }}
+}}
+"""
+
+
+def _java_decisions(pairs: list[tuple[str, int]]) -> str:
+    consts = ",\n".join(f"    {code}" for code, _ in pairs)
+    cases = "\n".join(f"            case {code} -> {score};" for code, score in pairs)
+    return _JAVA.format(consts=consts, cases=cases)
+
+
+def _workspace_with(tmp_path: Path, *, java: str | None = None, schema: dict | None = None) -> Path:
+    """构造工作区：真源在 CONCEPTS 里，对端落盘为 Java 与生成物 YAML。"""
+    src = tmp_path / "rcp-core" / "src" / "main" / "java" / "com" / "risk" / "platform" / "model"
+    src.mkdir(parents=True)
+    (src / "Decision.java").write_text(
+        java if java is not None else _java_decisions([("PASS", 0), ("INTERCEPT", 80)]),
+        encoding="utf-8",
+    )
+    schemas = tmp_path / "contracts" / "schemas"
+    schemas.mkdir(parents=True)
+    (schemas / "decision.yaml").write_text(
+        yaml.safe_dump(
+            schema if schema is not None
+            else {"enum": ["PASS", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 80}}
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_decision_aligned_across_three_sources(tmp_path: Path):
+    workspace = _workspace_with(tmp_path)
+    assert check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace) == []
+
+
+def test_decision_enum_drift_detected(tmp_path: Path):
+    workspace = _workspace_with(
+        tmp_path, schema={"enum": ["PASS", "WARN", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 80}}
+    )
+    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
+
+
+def test_decision_score_drift_detected(tmp_path: Path):
+    """枚举一致但分值漂移，同样要红——分值决定处置档位，不能只比名字。"""
+    workspace = _workspace_with(
+        tmp_path, schema={"enum": ["PASS", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 99}}
+    )
+    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
+
+
+def test_java_enum_drift_detected(tmp_path: Path):
+    """实现侧少一个决策等级，是"契约先行、实现没跟上"的典型漂移。"""
+    workspace = _workspace_with(tmp_path, java=_java_decisions([("PASS", 0)]))
+    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
+
+
+def test_java_score_drift_detected(tmp_path: Path):
+    workspace = _workspace_with(tmp_path, java=_java_decisions([("PASS", 0), ("INTERCEPT", 50)]))
+    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
+
+
+def test_decision_source_missing_is_skipped_explicitly(tmp_path: Path):
+    """对端都不在工作区时不许假装通过：输出 S003，说明比对未执行。"""
+    findings = check_decision_alignment(CONCEPTS, DECISION_SPEC, tmp_path)
+    assert "S003" in codes(findings, level="info")
+    assert "RL-003" not in codes(findings)
+
+
+def test_decision_missing_score_in_source_is_error():
+    broken = {"decisions": [{"code": "PASS", "base_score": None}]}
+    assert "RL-003" in codes(check_decision_alignment(broken, DECISION_SPEC, None))
 
 
 DATAWAY = {
@@ -229,7 +337,7 @@ def test_valid_spec_has_no_findings():
     redlines = {
         "constraints": [
             {"id": "RL-001", "spec": {"type": "registry-assert", "via": "kinds.allowed_depends_on_kinds"}},
-            {"id": "RL-003", "spec": {"type": "cross-source", "sources": [], "assert": "identical"}},
+            {"id": "RL-003", "spec": {"type": "cross-source", "source": ["ontology/tbox/decisions.ttl"], "assert": "identical"}},
             {"id": "RL-004", "spec": {"type": "file-scan", "include": ["*.sql"], "match": "create"}},
             {"id": "RL-005", "spec": {"type": "registry-scan", "include": ["pom.xml"], "extract": "dependency.groupId", "deny_values": ["mysql"], "allow_kinds": ["data-gateway"]}},
             {"id": "RL-007", "spec": {"type": "upstream-scan", "include": ["*.yml"], "scan_prefix": "rcp-ops/", "match": "http", "internal_hosts": {"from": "registry"}}},
@@ -553,13 +661,27 @@ def test_capability_ownership_closed_for_real_shape():
     assert findings == []
 
 
-def test_duplicate_yaml_key_is_load_error(tmp_path: Path):
-    """多人合并留下的重复键必须显式失败，不能静默取后者。"""
-    target = tmp_path / "dup.yaml"
-    target.write_text("a: 1\nb: 2\na: 3\n", encoding="utf-8")
-    with pytest.raises(LoadError) as exc:
-        read_yaml(target)
-    assert "重复键" in str(exc.value)
+def test_duplicate_functional_property_is_load_error(tmp_path: Path):
+    """RDF 允许多值，所以功能属性的多值必须显式失败——这是原 YAML 重复键检查的等价物。
+
+    没有这条护栏，`rcp:port 8080, 8090` 会被静默接受，读到的端口取决于遍历顺序。
+    """
+    from rdflib import Graph
+
+    from rcp_ontology.abox import AboxError, parse_abox
+
+    graph = Graph().parse(
+        data="""@prefix rcp: <https://risk-control.platform/ontology#> .
+rcp:platform a rcp:Platform ; rcp:platformName "t" .
+rcp:x a rcp:PatrolLine, rcp:Service ;
+    rcp:repo "rcp-x" ; rcp:port 8080, 8090 ;
+    rcp:external false ; rcp:owner "platform" .
+""",
+        format="turtle",
+    )
+    with pytest.raises(AboxError) as exc:
+        parse_abox(graph, "fixture")
+    assert "功能属性只允许一个值" in str(exc.value)
 
 
 def test_real_contracts_repo_is_closed():
@@ -572,12 +694,13 @@ def test_real_contracts_repo_is_closed():
     contracts = Path(os.environ.get("RCP_CONTRACTS")
                      or Path(__file__).resolve().parent.parent.parent / "rcp-contracts")
     workspace = Path(os.environ.get("RCP_WORKSPACE") or contracts.parent)
-    concepts = Path(__file__).resolve().parent.parent / "concepts"
-    if not contracts.is_dir():
-        pytest.skip("工作区无 rcp-contracts，跳过集成检查")
+    ontology = Path(os.environ.get("RCP_ONTOLOGY")
+                    or Path(__file__).resolve().parent.parent)
+    if not (ontology / "ontology").is_dir():
+        pytest.skip("工作区无本体仓，跳过集成检查")
     from rcp_ontology.checks import check_all
 
-    errors = [f for f in check_all(contracts, concepts, workspace) if f.level == "error"]
+    errors = [f for f in check_all(ontology, contracts, workspace) if f.level == "error"]
     assert errors == []
 
 
@@ -596,31 +719,64 @@ def test_diff_findings_reports_added_and_removed():
     assert drift["removed"] == [("warn", "W301", "能力 patrol.x 无服务使用")]
 
 
+def _write_ontology(root: Path, *, abox_extra: str = "") -> Path:
+    """构造一个最小可装载的本体仓：tbox / abox / policy 三层各一份 TTL。"""
+    (root / "ontology" / "tbox").mkdir(parents=True)
+    (root / "ontology" / "abox").mkdir(parents=True)
+    (root / "ontology" / "policy").mkdir(parents=True)
+    (root / "ontology" / "tbox" / "kinds.ttl").write_text(
+        """@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+rcp:PatrolLine a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "巡查线" ;
+    rcp:mustBeExternal false ; rcp:isEntry false ;
+    rcp:requiresPort true ; rcp:requiresContract true .
+
+rcp:PASS a rcp:Decision ; rdfs:label "放行" ; rcp:baseScore 0 .
+""",
+        encoding="utf-8",
+    )
+    (root / "ontology" / "abox" / "platform.ttl").write_text(
+        """@prefix rcp: <https://risk-control.platform/ontology#> .
+rcp:platform a rcp:Platform ; rcp:registrySchema "rcp.registry/v2" ; rcp:platformName "t" .
+""",
+        encoding="utf-8",
+    )
+    (root / "ontology" / "abox" / "services.ttl").write_text(
+        """@prefix rcp: <https://risk-control.platform/ontology#> .
+rcp:ghost a rcp:PatrolLine, rcp:Service ;
+    rcp:repo "rcp-ghost" ; rcp:port 8099 ;
+    rcp:external false ; rcp:owner "platform" ;
+    rcp:hasCapability rcp:patrol.ghost .
+"""
+        + abox_extra,
+        encoding="utf-8",
+    )
+    (root / "ontology" / "policy" / "redlines.ttl").write_text(
+        """@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+rcp:RL-001 a rcp:Redline ;
+    rcp:redlineId "RL-001" ; rcp:slug "x" ; rdfs:label "x" ;
+    rcp:spec [ a rcp:RegistryAssert ; rcp:via "kinds.allowedDependsOn" ] .
+""",
+        encoding="utf-8",
+    )
+    return root
+
+
 def test_check_declarations_is_scope_limited(tmp_path: Path):
     """check_declarations 只产出声明层结论（scope=declaration），不碰工作区文件布局。
 
-    用 tmp_path 构造一个带声明层违规（未立名能力）的最小契约仓，确保 findings 非空，
+    用 tmp_path 构造一个带声明层违规（未立名能力）的最小本体仓，确保 findings 非空，
     从而真正验证 scope 隔离——不依赖真实仓库当前是否恰好有噪音（声明层闭合时为空）。
     """
-    (tmp_path / "registry").mkdir()
-    (tmp_path / "registry" / "services.yaml").write_text(
-        yaml.safe_dump({
-            "services": [{
-                "name": "ghost", "repo": "rcp-ghost", "kind": "patrol-line",
-                "port": 8099, "external": False, "owner": "platform",
-                "capabilities": ["patrol.ghost"],  # 未立名能力 → E202
-                "depends_on": [], "contracts": [],
-            }],
-            "libraries": [],
-        }),
-        encoding="utf-8",
-    )
-    (tmp_path / "ontology" / "constraints").mkdir(parents=True)
-    (tmp_path / "ontology" / "constraints" / "redlines.yaml").write_text(
-        "constraints: []\nexceptions: []\n", encoding="utf-8"
-    )
+    _write_ontology(tmp_path)
 
     findings = check_declarations(tmp_path)
     assert findings
     assert all(f.scope == SCOPE_DECLARATION for f in findings)
-    assert all(f.level in {"error", "warn"} for f in findings)
+    assert any(f.level == "error" for f in findings)
+    assert "E202" in {f.code for f in findings}  # 未立名能力

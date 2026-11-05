@@ -5,7 +5,7 @@
 "绝对完整"。
 
 编号约定：
-- ``RL-00x``  对应 redlines.yaml 登记的红线
+- ``RL-00x``  对应 policy/redlines.ttl 登记的红线
 - ``E1xx``    登记与图结构的错误（含仓布局）
 - ``E2xx``    概念层（TBox）与归属错误
 - ``E3xx``    红线自身的元检查（声明但无实现）
@@ -31,16 +31,14 @@ from .loader import (
     SCOPE_WORKSPACE,
     Finding,
     load_concepts,
-    load_decision_schema,
     load_redlines,
     load_registry,
-    read_yaml,
+    load_relations,
 )
 from .relations import (
     declared_names,
     iter_edges,
     kind_class,
-    load_relations,
     reachability_graphs,
 )
 
@@ -48,10 +46,10 @@ REQUIRED_SERVICE_FIELDS = ("name", "repo", "kind", "external", "owner", "capabil
 
 # 规则规格（policy-as-code）已知的执行器类型与必填字段。
 # 每条红线的 spec.type 决定执行器，缺必填字段即 E302；无 spec 即 E301（纸面红线）。
-# 新增一条已支持类型的红线只需在 redlines.yaml 写 spec，无需改本文件或登记实现清单。
+# 新增一条已支持类型的红线只需在 policy/redlines.ttl 写 spec，无需改本文件。
 RULE_SPEC_TYPES: dict[str, dict[str, tuple[str, ...]]] = {
     "registry-assert": {"required": ("via",)},
-    "cross-source": {"required": ("sources", "assert")},
+    "cross-source": {"required": ("source", "assert")},
     "file-scan": {"required": ("include", "match")},
     "registry-scan": {"required": ("include", "extract", "deny_values", "allow_kinds")},
     "upstream-scan": {"required": ("include", "scan_prefix", "match", "internal_hosts")},
@@ -66,10 +64,10 @@ def _kind_map(concepts: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, 
     return {k["name"]: k for k in concepts["kinds"]}
 
 
-def _load_relations_or_none(ontology_dir: Path) -> dict[str, Any] | None:
-    """读关系层真源；缺文件返回 None，由 check_relations 输出 S002 明示未执行。"""
+def _load_relations_or_none(ontology_root: Path) -> dict[str, Any] | None:
+    """读关系层真源；不可用返回 None，由 check_relations 输出 S002 明示未执行。"""
     try:
-        return load_relations(ontology_dir)
+        return load_relations(ontology_root)
     except Exception:  # noqa: BLE001 - 声明不可用时降级为"未执行"，不伪装通过
         return None
 
@@ -128,69 +126,137 @@ def check_registry_shape(registry: dict[str, Any]) -> list[Finding]:
     return findings
 
 
+# ── RL-003 决策语义：TTL 真源 vs Java 实现 vs 生成物 ────────────────────────
+# 真源是 tbox/decisions.ttl；其余两份是受检对端，不是第二份真源：
+#   .java —— rcp-core 的 Decision 枚举与 baseScore()，实现侧必须逐字一致；
+#   .yaml —— contracts/schemas/decision.yaml，由 cli.py render-schema 生成的派生物，
+#            手改即与真源不一致，本检查即为"生成物被改动"的告警。
+# 对端路径相对工作区根；单仓时对端缺席，输出 S003 明示跳过，不伪装通过。
+
+_JAVA_ENUM_BODY = re.compile(r"enum\s+Decision\s*\{([^;}]*)")
+_JAVA_CONST = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*(?:,|;)?\s*$", re.M)
+_JAVA_CASE = re.compile(r"case\s+([A-Z][A-Z0-9_]*)\s*->\s*(-?\d+)")
+_JAVA_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_JAVA_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
+def _read_java_decisions(path: Path) -> tuple[list[str], dict[str, int]]:
+    """从 Decision.java 抽取枚举常量与 baseScore 分支的映射。"""
+    text = path.read_text(encoding="utf-8")
+    body = _JAVA_ENUM_BODY.search(text)
+    if not body:
+        raise ValueError("找不到 `enum Decision {`")
+    cleaned = _JAVA_LINE_COMMENT.sub("", _JAVA_BLOCK_COMMENT.sub("", body.group(1)))
+    codes = [m.group(1) for m in _JAVA_CONST.finditer(cleaned)]
+    scores = {m.group(1): int(m.group(2)) for m in _JAVA_CASE.finditer(text)}
+    return codes, scores
+
+
+def _read_schema_decisions(path: Path) -> tuple[list[str], dict[str, int]]:
+    """从生成的 decision.yaml 抽取 enum 与 x-base-score。"""
+    import yaml  # 只为读生成物，真源不经过 YAML
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return list(data.get("enum") or []), dict(data.get("x-base-score") or {})
+
+
 def check_decision_alignment(
-    contracts_root: Path,
     concepts: dict[str, list[dict[str, Any]]],
     spec: dict[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> list[Finding]:
-    """RL-003 决策枚举在契约层与本体层逐字一致，且分值一致。
+    """RL-003 决策枚举与分值在真源、实现与生成物之间逐字一致。
 
-    字段名（enum / x-base-score / base_score / code）从 redlines.yaml 的 RL-003
-    spec 读取；缺省退回既有字段名（兼容直接调用）。
+    真源内部先自检（每项必须有分值），再逐个对端比对。对端路径取 spec 的
+    ``source`` 列表，按扩展名选择读取器；``.ttl`` 是真源本身，跳过。
     """
-    spec = spec or {}
-    sources = spec.get("sources") or []
-    enum_field = (sources[0].get("field") if sources else None) or "enum"
-    code_key = (sources[1].get("key") if len(sources) > 1 else None) or "code"
-    fields = spec.get("fields") or [{"a": "x-base-score", "b": "base_score"}]
-    score_a = fields[0].get("a", "x-base-score")
-    score_b = fields[0].get("b", "base_score")
+    codes = [item.get("code") for item in concepts["decisions"]]
+    scores = {item.get("code"): item.get("base_score") for item in concepts["decisions"]}
 
-    try:
-        contract_enum = load_decision_schema(contracts_root, enum_field)
-    except Exception as exc:  # noqa: BLE001 - 缺文件即红
-        return [Finding("error", "RL-003", f"无法读取契约层决策枚举: {exc}")]
-
-    concept_codes = [item.get(code_key) for item in concepts["decisions"]]
     findings: list[Finding] = []
-    if contract_enum != concept_codes:
+    missing = [code for code, score in scores.items() if score is None]
+    if missing:
         findings.append(
-            Finding(
-                "error",
-                "RL-003",
-                f"决策枚举不一致：契约={contract_enum} 本体={concept_codes}",
-            )
+            Finding("error", "RL-003", f"真源 decisions.ttl 有决策缺 baseScore: {', '.join(missing)}")
         )
         return findings
 
-    scores = _load_contract_scores(contracts_root, score_a)
-    if scores is not None:
-        concept_scores = {i.get(code_key): i.get(score_b) for i in concepts["decisions"]}
+    sources = (spec or {}).get("source") or []
+    if isinstance(sources, str):
+        sources = [sources]
+    if not sources:
+        findings.append(
+            Finding("info", "S003", "RL-003 未声明 spec.source，跨源比对未执行")
+        )
+        return findings
+
+    checked = 0
+    absent: list[str] = []
+    for rel in sources:
+        if str(rel).endswith(".ttl"):
+            continue  # 真源自身
+        if workspace_root is None:
+            absent.append(str(rel))
+            continue
+        path = Path(workspace_root) / str(rel)
+        if not path.is_file():
+            absent.append(str(rel))
+            continue
+        checked += 1
+        suffix = path.suffix.lower()
+        try:
+            if suffix == ".java":
+                other_codes, other_scores = _read_java_decisions(path)
+            elif suffix in {".yaml", ".yml"}:
+                other_codes, other_scores = _read_schema_decisions(path)
+            else:
+                findings.append(
+                    Finding("error", "RL-003", f"{rel} 无可用的读取器（支持 .java / .yaml / .ttl）")
+                )
+                continue
+        except Exception as exc:  # noqa: BLE001 - 对端不可读即红
+            findings.append(Finding("error", "RL-003", f"{rel} 无法解析: {exc}"))
+            continue
+
+        if other_codes != codes:
+            findings.append(
+                Finding(
+                    "error",
+                    "RL-003",
+                    f"决策枚举不一致（{rel}）：真源={codes} 对端={other_codes}",
+                )
+            )
+            continue
+
         mismatch = [
-            f"{code}: 契约={score} 本体={concept_scores.get(code)}"
+            f"{code}: 真源={score} 对端={other_scores.get(code)}"
             for code, score in scores.items()
-            if score != concept_scores.get(code)
+            if other_scores and code in other_scores and other_scores.get(code) != score
         ]
+        if other_scores and not mismatch and set(other_scores) - set(codes):
+            extra = sorted(set(other_scores) - set(codes))
+            mismatch.append(f"对端多出决策: {', '.join(extra)}")
         if mismatch:
             findings.append(
-                Finding("error", "RL-003", "决策分值不一致 —— " + "；".join(mismatch))
+                Finding("error", "RL-003", f"{rel} 决策分值不一致 —— " + "；".join(mismatch))
             )
+
+    # 部分执行也必须说清楚：比了几个、几个没比。
+    # 只在"全缺席"时报会漏掉最常见的情形——单仓 CI 里生成物在、实现仓不在。
+    if absent:
+        findings.append(
+            Finding(
+                "info",
+                "S003",
+                f"RL-003 有 {len(absent)} 个对端不在工作区，未比对: {', '.join(absent)}"
+                f"（已比对 {checked} 个）",
+            )
+        )
     return findings
 
 
-def _load_contract_scores(contracts_root: Path, field: str = "x-base-score") -> dict[str, Any] | None:
-    """读 decision.yaml 的分值字段（缺省 x-base-score）。没有该段就当未声明分值。"""
-    path = contracts_root / "contracts" / "schemas" / "decision.yaml"
-    try:
-        data = read_yaml(path) or {}
-    except Exception:  # noqa: BLE001
-        return None
-    scores = data.get(field)
-    return scores if isinstance(scores, dict) else None
-
-
 def check_contracts_exist(
-    contracts_root: Path,
+    contracts_root: Path | None,
     registry: dict[str, Any],
     concepts: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[Finding]:
@@ -198,7 +264,16 @@ def check_contracts_exist(
 
     「必须挂契约」（requires_contract 种类缺契约）已由 SHACL（requires_contract
     动态 shape）承担；这里只做 SHACL 做不了的「文件是否真的存在于磁盘」判定。
+    没给契约仓路径时无法判磁盘，输出 S004 明示跳过而不是静默通过。
     """
+    if contracts_root is None:
+        return [
+            Finding(
+                "info",
+                "S004",
+                "未指定契约仓路径，RL-006 的「契约文件是否存在」未执行",
+            )
+        ]
     findings: list[Finding] = []
     for service in registry.get("services", []):
         name = service.get("name")
@@ -231,7 +306,7 @@ def check_rule_specs(redlines: dict[str, Any]) -> list[Finding]:
                 Finding(
                     "error",
                     "E301",
-                    f"{redline_id} 在 redlines.yaml 声明，但无 spec 规格，"
+                    f"{redline_id} 在 policy/redlines.ttl 声明，但无 spec 规格，"
                     f"检查器无法执行（纸面红线）",
                 )
             )
@@ -653,7 +728,7 @@ def check_repo_registration(
             Finding(
                 "error",
                 "E107",
-                f"工作区存在 {name}，但 registry/services.ttl 未登记该仓（先登记再开发）",
+                f"工作区存在 {name}，但 abox/services.ttl 未登记该仓（先登记再开发）",
                 SCOPE_WORKSPACE,
             )
         )
@@ -663,7 +738,7 @@ def check_repo_registration(
                 Finding(
                     "error",
                     "E107",
-                    f"registry 登记了 {name}，但工作区没有该目录（仓库改名或未检出）",
+                    f"abox 登记了 {name}，但工作区没有该目录（仓库改名或未检出）",
                     SCOPE_WORKSPACE,
                 )
             )
@@ -671,7 +746,7 @@ def check_repo_registration(
 
 
 def _spec_by_id(redlines: dict[str, Any], redline_id: str) -> dict[str, Any] | None:
-    """取某条红线在 redlines.yaml 里声明的 spec（供跨源比对等专用执行器使用）。"""
+    """取某条红线在 policy/redlines.ttl 里声明的 spec（供跨源比对等专用执行器使用）。"""
     for constraint in redlines.get("constraints", []):
         if constraint.get("id") == redline_id:
             spec = constraint.get("spec")
@@ -695,7 +770,7 @@ def check_shacl(
     """
     from rcp_ontology.semweb import build_rdf, validate_all
 
-    shapes_path = Path(__file__).resolve().parent.parent / "ontology" / "constraints.ttl"
+    shapes_path = Path(__file__).resolve().parent.parent / "ontology" / "shapes" / "core.ttl"
     graph = build_rdf(registry, concepts, relations)
     _, findings = validate_all(graph, shapes_path, concepts)
     return [
@@ -705,12 +780,16 @@ def check_shacl(
 
 
 def check_declarations(
-    contracts_root: Path,
-    concepts_dir: Path | None = None,
+    ontology_root: Path,
+    contracts_root: Path | None = None,
+    workspace_root: Path | None = None,
 ) -> list[Finding]:
     """只跑声明层检查：登记/契约/红线/图/归属/SHACL，不碰工作区文件布局。
 
-    contracts_root: 契约仓根；concepts_dir: TBox 目录（缺省本仓 concepts/）。
+    ontology_root: 本体仓根（含 ontology/ 目录）；契约仓只提供 OpenAPI 与生成物，
+    不再承载任何登记真源。contracts_root 缺省时跳过"契约文件是否存在"（RL-006 的
+    磁盘判据），并输出 S004 明示跳过。
+
     这些检查只依赖声明文件，任何单仓环境都能复算，是架构熵基线对比的范围。
 
     两轨分工：
@@ -721,18 +800,18 @@ def check_declarations(
         （RL-002）、种类/能力声明（E201/E202）、TBox 自洽（E113）、
         挂契约（RL-006 的 minCount 部分）。
     """
-    concepts_dir = concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
-    registry = load_registry(contracts_root)
-    concepts = load_concepts(concepts_dir)
-    redlines = load_redlines(contracts_root)
-    relations = _load_relations_or_none(concepts_dir.parent / "ontology")
+    registry = load_registry(ontology_root)
+    concepts = load_concepts(ontology_root)
+    redlines = load_redlines(ontology_root)
+    relations = _load_relations_or_none(ontology_root)
+    scope_root = workspace_root or Path(ontology_root).resolve().parent
 
     findings: list[Finding] = []
     findings += check_rule_specs(redlines)
     findings += check_relations(registry, relations, concepts)
     findings += check_registry_shape(registry)
     findings += check_expected_state(registry)
-    findings += check_decision_alignment(contracts_root, concepts, _spec_by_id(redlines, "RL-003"))
+    findings += check_decision_alignment(concepts, _spec_by_id(redlines, "RL-003"), scope_root)
     findings += check_contracts_exist(contracts_root, registry, concepts)
     findings += check_capability_naming(concepts)
     findings += check_capability_ownership(registry, concepts)
@@ -764,27 +843,26 @@ def diff_findings(
 
 
 def check_all(
-    contracts_root: Path,
-    concepts_dir: Path | None = None,
+    ontology_root: Path,
+    contracts_root: Path | None = None,
     workspace_root: Path | None = None,
 ) -> list[Finding]:
     """跑全部检查（声明层 + 工作区文件布局层）。
 
-    contracts_root: 契约仓根；concepts_dir: TBox 目录（缺省本仓 concepts/）；
-    workspace_root: 多仓工作区根（缺省取契约仓的父目录）。
+    ontology_root: 本体仓根；contracts_root: 契约仓根（OpenAPI 与生成物）；
+    workspace_root: 多仓工作区根（缺省取本体仓的父目录）。
     """
-    concepts_dir = concepts_dir or Path(__file__).resolve().parent.parent / "concepts"
-    workspace_root = workspace_root or contracts_root.parent
-    registry = load_registry(contracts_root)
+    workspace_root = Path(workspace_root or Path(ontology_root).resolve().parent)
+    registry = load_registry(ontology_root)
 
-    findings = check_declarations(contracts_root, concepts_dir)
+    findings = check_declarations(ontology_root, contracts_root, workspace_root)
 
     complete = workspace_is_complete(workspace_root, registry)
 
     workspace_findings: list[Finding] = []
     workspace_findings += [
         replace(f, scope=SCOPE_WORKSPACE)
-        for f in run_declared_scans(load_redlines(contracts_root), workspace_root, registry)
+        for f in run_declared_scans(load_redlines(ontology_root), workspace_root, registry)
     ]
     workspace_findings += check_repo_registration(workspace_root, registry, complete)
     findings += workspace_findings
