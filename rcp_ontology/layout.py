@@ -6,9 +6,9 @@
 - RL-005 业务服务不得直接引入 JDBC 驱动，读写只经 dataway（registry-scan）
 - RL-007 部署清单不得写死内部服务的上游地址（upstream-scan）
 
-本模块是"规则解释器"：执行参数（include / match / deny_values / allow_prefixes /
-scan_prefix / internal_hosts / message 模板）全部来自 redlines.yaml 的 spec 声明，
-这里不硬编码任何红线参数。新增或调整一条红线只需改 redlines.yaml。
+本模块是"规则解释器"：执行参数（include / match / denyValues / allowPrefixes /
+scanPrefix / internalHosts / message 模板）全部来自 policy/redlines.ttl 的 spec 声明，
+这里不硬编码任何红线参数。新增或调整一条红线只需改 policy/redlines.ttl。
 
 边界：只做文本与结构判定，不解析 Java 语义、不连集群、不判断"能否运行"。
 判定依据是仓库里的文件内容，因此结论可复算、可复现。
@@ -26,7 +26,7 @@ from typing import Any, Iterable, Iterator
 from .loader import Finding
 
 # 遍历时跳过的目录：构建产物、依赖、VCS 元数据、worktree。
-# 这是"基础设施"而非"规则参数"，对所有规则一致，故不放入 redlines.yaml。
+# 这是"基础设施"而非"规则参数"，对所有规则一致，故不放入 policy/redlines.ttl。
 PRUNED_DIRS = {
     ".git",
     ".agents",
@@ -256,7 +256,7 @@ def run_upstream_scan(
 
     t_unreg = (
         spec.get("message")
-        or "{rel}:{lineno} 写死上游 {url}；应经服务发现解析，或在 redlines.yaml 登记例外"
+        or "{rel}:{lineno} 写死上游 {url}；应经服务发现解析，或在 policy/redlines.ttl 登记例外"
     )
     t_expired = (
         spec.get("message_expired")
@@ -331,9 +331,9 @@ def run_declared_scans(
     workspace: Path,
     registry: dict[str, Any],
 ) -> list[Finding]:
-    """按 redlines.yaml 的 spec 声明执行三类扫描红线。
+    """按 policy/redlines.ttl 的 spec 声明执行三类扫描红线。
 
-    每类 spec.type 对应一个解释器；新增一条已支持类型的红线只需在 redlines.yaml
+    每类 spec.type 对应一个解释器；新增一条已支持类型的红线只需在 redlines.ttl
     加一条声明，无需改本文件。registry-assert 与 cross-source 的判定由 checks.py
     的 TBox 驱动检查与跨源比对承担（不在这里）。
     """

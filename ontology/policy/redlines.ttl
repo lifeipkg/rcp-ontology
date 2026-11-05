@@ -1,0 +1,140 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 架构红线：可机械检查的硬约束，违反即红。由 rcp-ontology 的 check 执行。
+#
+# 每条红线 = 一个 rcp:Redline 个体 + 一个 rcp:spec 规格。
+#   rcp:spec 的 rdf:type 决定执行器（FileScan → file-scan，RegistryScan → registry-scan …）；
+#   其余谓词即执行参数，装载时 local name 转 snake_case 成为字典键。
+#
+# 书写约定：
+#   1. 复数参数用 RDF 列表：rcp:include ( "*.sql" )。单值用字面量。
+#      这样"单值还是列表"由图结构决定，不靠 Python 里的键名白名单猜。
+#   2. 正则里的反斜杠必须写成 \\（Turtle 无 raw string）：\\d、\\b、\\s。
+#   3. 无 spec 即纸面红线（E301）；spec.type 未知或缺必填字段即 E302。
+#   4. message 是命中时的报告模板（{rel}/{matched}/{url} 等为占位）。
+#
+# 改参数只改本文件，无需改 Python。新增一种 spec.type 才需要写执行器。
+# ─────────────────────────────────────────────────────────────────────────────
+
+rcp:RL-001 a rcp:Redline ;
+    rcp:redlineId "RL-001" ;
+    rcp:slug "patrol-line-no-cross-call" ;
+    rdfs:label "巡查线之间不得互相调用" ;
+    rcp:rationale "巡查线必须可独立部署、独立降级；互调会造成级联降级与责任不清。" ;
+    rcp:rule "kind=patrol-line 的服务，其 dependsOn 中不得出现任何 kind=patrol-line 的服务。" ;
+    rcp:spec [
+        a rcp:RegistryAssert ;
+        rcp:via "kinds.allowedDependsOn"
+    ] .
+
+rcp:RL-002 a rcp:Redline ;
+    rcp:redlineId "RL-002" ;
+    rcp:slug "external-entry-is-gateway" ;
+    rdfs:label "对外入口唯一" ;
+    rcp:rationale "边缘只暴露网关与前端；服务端口直接对外会绕过幂等、状态机与分级处置。" ;
+    rcp:rule "external=true 的服务只允许 kind in [gateway, frontend]；其余服务必须 external=false。" ;
+    rcp:spec [
+        a rcp:RegistryAssert ;
+        rcp:via "kinds.mustBeExternal"
+    ] .
+
+rcp:RL-003 a rcp:Redline ;
+    rcp:redlineId "RL-003" ;
+    rcp:slug "decision-single-source" ;
+    rdfs:label "决策语义唯一来源" ;
+    rcp:rationale "四条线各自发明决策等级会导致处置层无法分级，风险分不可比。" ;
+    rcp:rule """tbox/decisions.ttl 是决策语义的唯一真源。
+rcp-core 的 Decision 枚举与 baseScore() 必须与真源逐字一致；
+contracts/schemas/decision.yaml 是生成物（cli.py render-schema），不得手改；
+其余 OpenAPI / schema 只能 $ref 该文件，不得内联枚举。""" ;
+    rcp:spec [
+        a rcp:CrossSource ;
+        rcp:assert "identical" ;
+        rcp:source (
+            "rcp-ontology/ontology/tbox/decisions.ttl"
+            "rcp-core/src/main/java/com/risk/platform/model/Decision.java"
+            "rcp-contracts/contracts/schemas/decision.yaml"
+        ) ;
+        rcp:message "决策语义不一致：{detail}"
+    ] .
+
+rcp:RL-004 a rcp:Redline ;
+    rcp:redlineId "RL-004" ;
+    rcp:slug "ddl-only-via-dbops" ;
+    rdfs:label "DDL 只能经 db-ops" ;
+    rcp:rationale "表结构变更需版本化、可回滚、可审计；散落在业务仓里无法保证顺序与恢复。" ;
+    rcp:rule "除 rcp-ops/migrations 外，任何仓不得包含 *.sql 的建表/改表语句。" ;
+    rcp:spec [
+        a rcp:FileScan ;
+        rcp:include ( "*.sql" ) ;
+        rcp:allowPrefixes ( "rcp-ops/migrations/" "migrations/" ) ;
+        rcp:match "\\b(?:create|alter|drop|truncate)\\s+(?:table|index|view|database|schema|unique\\s+index)\\b" ;
+        rcp:caseInsensitive true ;
+        rcp:message "{rel} 含 DDL「{matched}」；建表/改表只允许经 db-ops 执行 {allowed} 下的迁移"
+    ] .
+
+rcp:RL-005 a rcp:Redline ;
+    rcp:redlineId "RL-005" ;
+    rcp:slug "business-data-only-via-dataway" ;
+    rdfs:label "业务读写只能经 dataway" ;
+    rcp:rationale "直连数据库会让连接、权限、审计与限流全部失效。" ;
+    rcp:rule "业务服务仓的 pom 不得引入 JDBC 驱动依赖；数据访问只能通过 dataway 的 HTTP 契约。" ;
+    rcp:spec [
+        a rcp:RegistryScan ;
+        rcp:include ( "pom.xml" ) ;
+        rcp:extract "dependency.groupId" ;
+        rcp:denyValues ( "mysql" "com.mysql" "com.mysql.jdbc" "org.postgresql"
+                         "com.h2database" "com.oracle.database.jdbc" "org.mariadb.jdbc" ) ;
+        rcp:allowKinds ( "data-gateway" "db-ops" ) ;
+        rcp:message "{repo}（{name}）的 pom 引入 JDBC 驱动 {group}:{artifact}；业务读写只能经 dataway 的 HTTP 契约"
+    ] .
+
+rcp:RL-006 a rcp:Redline ;
+    rcp:redlineId "RL-006" ;
+    rcp:slug "service-must-register" ;
+    rdfs:label "服务必须登记并挂契约" ;
+    rcp:rationale "未登记的服务等于绕过契约先行，消费侧无法对表。" ;
+    rcp:rule "services 中每个服务必须有非空 contract（frontend 与 meta 除外），且契约文件在仓内存在。" ;
+    rcp:spec [
+        a rcp:RegistryAssert ;
+        rcp:via "kinds.requiresContract"
+    ] .
+
+rcp:RL-007 a rcp:Redline ;
+    rcp:redlineId "RL-007" ;
+    rcp:slug "no-hardcoded-upstream" ;
+    rdfs:label "上游地址不得写死" ;
+    rcp:rationale "部署清单写死服务地址后，扩缩容、灰度、故障转移都要改配置并重发；消费方也无法在未知上游存在时被自动发现。" ;
+    rcp:rule """rcp-ops 下的 compose 与 K8s 清单不得出现指向 internal 服务
+（registry 中 external=false）的 http(s)://<服务名>:<端口> 地址。
+无法立即消除时须在下方 exceptions 登记，并给出 reviewBy 复审日期。""" ;
+    rcp:spec [
+        a rcp:UpstreamScan ;
+        rcp:scanPrefix "rcp-ops/" ;
+        rcp:include ( "*.yml" "*.yaml" ) ;
+        rcp:match "https?://([a-z][a-z0-9-]*):([0-9]{2,5})" ;
+        rcp:internalHosts [ rcp:from "registry" ; rcp:where "external == false" ] ;
+        rcp:message "{rel}:{lineno} 写死上游 {url}；应经服务发现解析，或在 policy/redlines.ttl 登记例外" ;
+        rcp:messageExpired "{rel}:{lineno} 写死上游 {url}；登记的例外已于 {reviewBy} 过期，须复审" ;
+        rcp:messageExcepted "{rel} {span}写死内部服务地址（例外：{reason}；owner={owner}，复审 {reviewBy}）"
+    ] .
+
+# ── 例外登记 ────────────────────────────────────────────────────────────────
+# 无法立即消除的偏离。必须同时给出 scope、match、reason、owner、reviewBy —— 缺一项
+# 视为未登记。检查器命中即降级为 warn；reviewBy 过期后自动恢复为 error。
+#
+# 当前无例外：服务发现已接线（见 rcp-contracts/docs/DISCOVERY.md），RL-007 的 12 处
+# 写死地址已随收尾从 rcp-ops 清单中删除。
+#
+# 登记写法（示例，取消注释即生效）：
+#
+# rcp:exception_RL-007_01 a rcp:Exception ;
+#     rcp:redline rcp:RL-007 ;
+#     rcp:scope "rcp-ops/k8s/gateway.yaml" ;
+#     rcp:match "http://legacy-risk:8088" ;
+#     rcp:reason "遗留系统未接入服务发现，2027Q1 下线" ;
+#     rcp:owner "platform" ;
+#     rcp:reviewBy "2027-03-31"^^xsd:date .

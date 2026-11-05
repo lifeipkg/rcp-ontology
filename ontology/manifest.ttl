@@ -1,0 +1,42 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 本体清单：本仓 ontology/ 目录的唯一入口。
+#
+# 这不是索引文件，而是本体的身份与分层说明。装载器按目录顺序扫描（tbox → abox →
+# policy → shapes，各层内按文件名排序），不读本文件的 imports —— rdflib 不跟随
+# owl:imports，写一个会被忽略的清单比不写更危险。**加载顺序由目录决定**。
+#
+# 本清单存在的意义：说明每一层为什么在这里，以及新增文件该放哪。
+# ─────────────────────────────────────────────────────────────────────────────
+
+<https://risk-control.platform/ontology>
+    a owl:Ontology ;
+    rdfs:label "风控平台本体" ;
+    owl:versionInfo "2.0.0" ;
+    rdfs:comment """唯一真源根。全部声明是 TTL，没有 YAML。
+
+分层（目录即层）：
+
+  tbox/    概念 —— 存在什么
+    schema.ttl        类与属性的词汇层（本体的骨架）
+    kinds.ttl         服务种类及其五个行为属性
+    capabilities.ttl  能力立名与归属
+    decisions.ttl     决策等级与基准分（处置语义唯一真源）
+    relations.ttl     关系种类、分域图与端点约束
+    terms.ttl         业务术语与概念的对应
+
+  abox/    实例 —— 本平台登记了什么
+    platform.ttl      平台标识、基座版本钉、服务发现
+    services.ttl      服务、库、边、预期状态
+
+  policy/  规则 —— 什么算违规
+    redlines.ttl      架构红线（spec 即执行参数）与例外登记
+
+  shapes/  约束 —— 图形状
+    core.ttl          SHACL 静态约束（不随 TBox 变化的固定结构约束）
+
+新增文件放在对应层；跨层的引用只允许"abox 引用 tbox"，不允许反向。
+""" .

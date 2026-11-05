@@ -1,30 +1,27 @@
-"""关系层：关系类型与公理以 TTL 为真源，实例边从登记读取并规范化。
+"""关系层：关系类型与公理在 tbox/relations.ttl，实例边从 ABox 读取并规范化。
 
-真源分工（本仓唯一的例外，且是刻意的）：
+分工是"断言"与"事实"的分工：
 
-- ``ontology/relations.ttl``（手写 TTL）：有哪些关系、属于哪张图、该图是否参与可达性、
-  端点种类约束、是否已启用判定。这些是「关于关系的断言」，无法从任何 key: value
-  属性推导，只能写成语义三元组。
-- ``registry/services.ttl``（ABox）：谁对谁有这条边，是可评审的事实。
+- ``tbox/relations.ttl``：有哪些关系、属于哪张图、该图是否参与可达性、端点种类约束、
+  是否已启用判定。这些是「关于关系的断言」，无法从任何 key: value 属性推导，
+  只能写成语义三元组。
+- ``abox/services.ttl``：谁对谁有这条边，是可评审的事实。
 
-所以真源不是「某一种格式」，而是「每一层只有一个编辑面」。关系公有 N 条时，加一条
-关系只改 relations.ttl，不改本文件、不改 checks、不改 shapes。
+所以真源不是「某一种格式」，而是「每一层只有一个目录」。关系有 N 条时，加一条关系
+只改 relations.ttl，不改本文件、不改 checks、不改 shapes。
 
-旧字段 ``depends_on`` 等价于 ``calls``：作为兼容别名保留，避免一次性迁移登记。
+旧字段 ``depends_on`` 等价于 ``calls``：作为兼容别名保留，供外部集成把旧的字典视图
+喂进来（磁盘上已经没有 YAML 了，这条只影响内存视图）。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from rdflib import Graph
 from rdflib.namespace import RDF, RDFS
 
-from .loader import LoadError
 from .namespaces import RCP
-
-RELATIONS_FILE = "relations.ttl"
 
 # 登记里的旧字段 → 关系名。新增关系不要往这里加：加进 relations.ttl。
 LEGACY_FIELD_ALIASES = {"depends_on": "calls"}
@@ -47,8 +44,8 @@ def kind_class(kind: str) -> str:
     return "".join(part.capitalize() for part in str(kind).split("-"))
 
 
-def load_relations(ontology_dir: Path) -> dict[str, Any]:
-    """解析 relations.ttl，返回图与关系的声明视图。
+def parse_relations(graph: Graph, source: str) -> dict[str, Any]:
+    """从 TBox 合并图里提取图与关系的声明视图。
 
     返回::
 
@@ -56,22 +53,15 @@ def load_relations(ontology_dir: Path) -> dict[str, Any]:
           "graphs": {"call": {"name", "label", "reachability"}},
           "relations": {"calls": {"name", "graph", "status", "sub_property_of",
                                   "source_kinds", "target_kinds"}},
-          "path": Path,
+          "source": "kinds.ttl, relations.ttl, schema.ttl",
         }
 
     图名与关系名一律取 ``rcp:name`` 的字面值（不是 IRI local name），
     这样 kebab / snake 命名不受 RDF 谓词写法限制。
+
+    只筛选**已声明**的关系与图：schema.ttl 里的 owl:ObjectProperty 不带 rcp:name，
+    因此不会混进来。
     """
-    path = ontology_dir / RELATIONS_FILE
-    if not path.is_file():
-        raise LoadError(f"关系声明文件不存在: {path}")
-
-    graph = Graph()
-    try:
-        graph.parse(path, format="turtle")
-    except Exception as exc:  # noqa: BLE001 - 语法错误即声明不可用
-        raise LoadError(f"{path} 解析失败: {exc}") from exc
-
     graphs: dict[str, dict[str, Any]] = {}
     for node in graph.subjects(RDF.type, RCP.RelationGraph):
         name = graph.value(node, RCP.name)
@@ -104,7 +94,9 @@ def load_relations(ontology_dir: Path) -> dict[str, Any]:
             "target_kinds": [_local(v) for v in graph.objects(node, RCP.targetKind)],
         }
 
-    return {"graphs": graphs, "relations": relations, "path": path}
+    if not relations:
+        raise ValueError(f"{source} 里没有任何关系声明（缺 `a rcp:RelationKind`）")
+    return {"graphs": graphs, "relations": relations, "source": source}
 
 
 def relation_graph(relations: dict[str, Any], name: str) -> str | None:

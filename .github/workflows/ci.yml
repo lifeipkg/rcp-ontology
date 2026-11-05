@@ -11,11 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 契约仓只提供 OpenAPI 与生成的决策 schema；声明真源在本仓 ontology/。
+      # 单仓 CI 里 RL-003 的 rcp-core 对端不在，检查器会输出 S003 说明未比对。
       - name: 检出契约仓
         uses: actions/checkout@v4
         with:
           repository: lifeipkg/rcp-contracts
-          path: .deps/rcp-contracts
+          path: rcp-contracts
 
       - uses: actions/setup-python@v5
         with:
@@ -28,4 +30,4 @@ jobs:
         run: python -m pytest -q
 
       - name: 一致性检查
-        run: python rcp_ontology/cli.py check --contracts .deps/rcp-contracts
+        run: python rcp_ontology/cli.py check --contracts rcp-contracts

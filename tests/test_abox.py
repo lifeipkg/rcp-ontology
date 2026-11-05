@@ -1,4 +1,4 @@
-"""TTL 登记源：还原规则与严格性。
+"""ABox 层（ontology/abox/）：还原规则与严格性。
 
 每条还原规则都配一条反例——只测"能读对"不测"读错会报"，等于没有护栏。
 """
@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 from rcp_ontology.loader import LoadError, load_registry
-from rcp_ontology.registry_ttl import RegistryTTLError, parse_registry
+from rdflib import Graph
+
+from rcp_ontology.abox import AboxError, parse_abox
 
 HEADER = """\
 @prefix rcp:  <https://risk-control.platform/ontology#> .
@@ -19,18 +21,27 @@ HEADER = """\
 """
 
 
-def write_ttl(tmp_path: Path, body: str, *, platform: bool = False) -> Path:
-    root = tmp_path / "contracts"
-    (root / "registry").mkdir(parents=True, exist_ok=True)
-    text = HEADER
-    if platform:
-        text += """
+PLATFORM = """\
 rcp:platform a rcp:Platform ;
-    rcp:registrySchema "rcp.registry/v1" ;
+    rcp:registrySchema "rcp.registry/v2" ;
     rcp:platformName "risk-control-platform" .
 """
-    (root / "registry" / "services.ttl").write_text(text + body, encoding="utf-8")
-    return root
+
+
+def write_ttl(tmp_path: Path, body: str, *, platform: bool = False) -> Path:
+    """把夹具写进 ontology/abox/：平台配置与实例登记是两个文件，同层合并。"""
+    layer = tmp_path / "ontology" / "abox"
+    layer.mkdir(parents=True, exist_ok=True)
+    text = HEADER + PLATFORM
+    if platform:
+        text += 'rcp:platform rcp:stack [ rcp:java "17" ] .\n'
+    (layer / "platform.ttl").write_text(text, encoding="utf-8")
+    (layer / "services.ttl").write_text(HEADER + body, encoding="utf-8")
+    return tmp_path
+
+
+def _parse(path: Path):
+    return parse_abox(Graph().parse(path, format="turtle"), path.name)
 
 
 def test_service_attributes_kind_and_edges(tmp_path: Path) -> None:
@@ -151,13 +162,17 @@ def test_relation_target_must_be_iri(tmp_path: Path) -> None:
     assert "目标不是实例 IRI" in str(exc.value)
 
 
-def test_ttl_wins_over_yaml(tmp_path: Path) -> None:
-    """两个文件同时存在时以 TTL 为准：迁移期允许 YAML 残留，但不得盖过真源。"""
+def test_yaml_leftovers_in_layer_are_ignored(tmp_path: Path) -> None:
+    """ABox 层只读 .ttl：目录里残留的 YAML 不会被当成声明，也不会盖过真源。
+
+    真源搬家之后，"两个文件同时说是真源"这种状态必须无法表达——只扫 *.ttl
+    就是这句话的机械实现。
+    """
     root = write_ttl(
         tmp_path,
         'rcp:from-ttl a rcp:PatrolLine, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false .\n',
     )
-    (root / "registry" / "services.yaml").write_text(
+    (root / "ontology" / "abox" / "services.yaml").write_text(
         textwrap.dedent(
             """
             services:
@@ -175,23 +190,22 @@ def test_ttl_wins_over_yaml(tmp_path: Path) -> None:
 
 
 def test_platform_config_is_merged(tmp_path: Path) -> None:
+    """平台配置与实例登记同层不同文件，装载后是同一份视图。"""
     root = write_ttl(
         tmp_path,
         'rcp:a a rcp:PatrolLine, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false .\n',
         platform=True,
     )
-    (root / "registry" / "platform.yaml").write_text(
-        'schema: rcp.platform/v1\nbaseline_stack:\n  java: "17"\n', encoding="utf-8"
-    )
     registry = load_registry(root)
     assert registry["platform"] == "risk-control-platform"
     assert registry["baseline_stack"] == {"java": "17"}
-    # 平台配置的 schema 不得覆盖登记图自身的 schema
-    assert registry["schema"] == "rcp.registry/v1"
+    assert registry["schema"] == "rcp.registry/v2"
 
 
-def test_parse_registry_reports_broken_turtle(tmp_path: Path) -> None:
-    path = tmp_path / "broken.ttl"
-    path.write_text("rcp:a a rcp:Service ; ;", encoding="utf-8")
-    with pytest.raises(RegistryTTLError):
-        parse_registry(path)
+def test_broken_turtle_is_load_error(tmp_path: Path) -> None:
+    """语法错误必须变成"声明不可用"，不能让人以为检查通过了。"""
+    layer = tmp_path / "ontology" / "abox"
+    layer.mkdir(parents=True)
+    (layer / "services.ttl").write_text("rcp:a a rcp:Service ; ;", encoding="utf-8")
+    with pytest.raises(LoadError):
+        load_registry(tmp_path)

@@ -1,17 +1,22 @@
 @prefix rcp: <https://risk-control.platform/ontology#> .
 @prefix sh:  <http://www.w3.org/ns/shacl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
+# ─────────────────────────────────────────────────────────────────────────────
 # SHACL 约束（shapes）。分两类：
 #
-#   静态（本文件）：不随 types 声明（concepts/tbox.ttl）内容变化的「固定结构约束」。
-#   动态（semweb/shapes.py）：白名单 / external 方向 / port、contract 是否必填，
-#       参数来自 types 声明（concepts/tbox.ttl），随数据而变。
+#   静态（本文件）：不随 TBox 内容变化的「固定结构约束」。
+#       目标类、路径、必填与否都是固定的，与 kinds/capabilities 的具体条目无关。
+#   动态（semweb/shapes.py）：白名单、external 方向、port/contract 是否必填，
+#       参数来自 tbox/kinds.ttl 的每个 kind，随数据而变。
 #
-# 文件扫描类红线（RL-004/005/007）、跨源比对（RL-003）、键存在性（E001 其余字段）、
-# 唯一键（E002）、能力命名（E114）、能力归属（E111/E112）、expected 形状（E115）、
-# 图连通性（E108/E109/E110）不在 SHACL 能力内，仍由 checks.py 承担。边界见 README。
+# 不在 SHACL 能力内的判定仍由 checks.py 承担：文件扫描类红线（RL-004/005/007）、
+# 跨源比对（RL-003）、键存在性（E001 其余字段）、唯一键（E002）、能力命名（E114）、
+# 能力归属（E111/E112）、expected 形状（E115）、图连通性（E108/E109/E110）。
+# 边界见 README。
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ---- E105：依赖必须指向已登记的服务（dependsOn 对象必须是 rcp:Service） ----
 rcp:RegisteredDependencyShape a sh:NodeShape ;

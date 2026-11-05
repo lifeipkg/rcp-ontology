@@ -1,8 +1,17 @@
 """L1 导出：把声明图合成一张可查询的 RDF 图。
 
-ABox（``registry/services.ttl``）与 TBox（``concepts/tbox.ttl``）本来就是图，导出器
-不做格式翻译，只做两件事：把关系实例物化成 ``dependsOn`` 汇总边、把两仓的图并成一张。
-只有手工构造字典视图的调用方（测试、外部集成）才会走"字典 → 三元组"的合成路径。
+本模块接收的是装载层解析出的**字典视图**（``abox.py`` / ``tbox.py`` 的输出），
+把它们重新合成三元组。因此当前数据流是一个往返：
+
+    原始 TTL ──rdflib──> Graph ──装载层──> 字典 ──本模块──> Graph
+
+原始图在装载后本可保留，却先降级为字典、再在此处重建。生产路径全部走这条往返——
+``check_shacl``、``export``、``shacl``、``sparql`` 四个命令都调用 ``build_rdf``，
+不只是测试与外部集成。
+
+暂不消除的原因：``checks.py`` 的判定逻辑按字典形态编写且体量较大（883 行），
+直接改为查询 Graph 是一次独立重构，不属于本次收敛范围。在此之前必须注意：
+本模块的谓词映射与 ``abox.py`` 的还原映射**互为逆映射**，两边同时改才不会丢字段。
 
 三元组形态：
     rcp:content-patrol  rdf:type          rcp:PatrolLine ;
@@ -30,7 +39,7 @@ from rdflib import BNode, Graph, Literal
 from rdflib.namespace import RDF, RDFS, XSD
 
 from ..relations import kind_class, relation_graph, service_relations
-from .namespaces import RCP
+from ..namespaces import RCP
 
 __all__ = ["build_rdf", "kind_class"]
 
@@ -166,12 +175,12 @@ def build_rdf(
 ) -> Graph:
     """把登记与概念声明翻译成 RDF 图。
 
-    TBox 自带原图（``concepts["tbox_graph"]``，来自 ``concepts/tbox.ttl``）时直接并入，
+    TBox 自带原图（``concepts["tbox_graph"]``，来自 tbox/ 的合并图）时直接并入，
     不再从字典反向合成种类/能力/决策三元组——同一事实只允许有一条产出路径，否则
     字典与图之间会多出一个可漂移的翻译器。只有手工构造字典的调用方（测试、外部集成）
     才走合成路径。
 
-    不加载 ontology/constraints.ttl 的 shapes——那是校验，不是事实。
+    不加载 shapes/core.ttl 的 shapes——那是校验，不是事实。
     """
     g = Graph()
     g.bind("rcp", RCP)

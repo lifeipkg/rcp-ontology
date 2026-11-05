@@ -1,7 +1,7 @@
-"""L3 动态 shapes：把 TBox（concepts/tbox.ttl）里的「数据驱动约束」编译成 SHACL shapes。
+"""L3 动态 shapes：把 TBox（tbox/kinds.ttl）里的「数据驱动约束」编译成 SHACL shapes。
 
 静态的「固定结构约束」（E105 依赖未登记、E201 种类未声明、E202 能力未声明、
-E113 布尔属性与引用悬空、E114 命名）写在 ontology/constraints.ttl，因为它们不随
+E113 布尔属性与引用悬空、E114 命名）写在 shapes/core.ttl，因为它们不随
 TBox 的内容变化。而本模块生成的四类约束，其参数（白名单、external 方向、
 port/contract 是否必填）都来自 TBox 的每个 kind，属于「规则即数据」——
 TBox 改了，shapes 随之变，无需改本文件。
@@ -25,7 +25,7 @@ from rdflib import BNode, Graph, Literal
 from rdflib.namespace import RDF, SH, XSD
 
 from .exporter import kind_class
-from .namespaces import RCP
+from ..namespaces import RCP
 
 
 def _rdf_list(g: Graph, items: list) -> object:

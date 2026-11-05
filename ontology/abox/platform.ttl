@@ -1,0 +1,44 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 平台配置：标识、基座版本钉、服务发现。
+#
+# 这些是平台级单点事实，全工作区只有这一份。消费方式（工作区根）：
+#   python rcp-ontology/rcp_ontology/cli.py render --contracts rcp-contracts --out SERVICES.md
+# 或读本文件：
+#   grep -A6 'rcp:stack' rcp-ontology/ontology/abox/platform.ttl
+#
+# 基座版本：服务侧必须对齐，禁止各仓自行抬版本。Spring Cloud 与 Spring Cloud
+# Alibaba 的兼容组合经容器内 Maven 构建验证：Boot 3.3.x → Spring Cloud 2023.0.x
+# (Leyton) → SCA 2023.0.3.x（nacos-client 2.4.x，配 Nacos Server v2.3.2）。
+#
+# 服务发现：消费方按服务名解析地址，不在部署清单里写死上游 URL（见 RL-007）。
+#   discoveryState 取值：
+#     declared —— 形态已声明、基础设施清单已就位，Java 侧尚未引入 discovery 依赖
+#     wired    —— 服务已引入依赖并按 name 解析，清单中不再出现上游地址
+# ─────────────────────────────────────────────────────────────────────────────
+
+rcp:platform
+    a rcp:Platform ;
+    rcp:registrySchema "rcp.registry/v2" ;
+    rcp:platformName "risk-control-platform" ;
+    rcp:updated "2026-11-05"^^xsd:date ;
+    rcp:stack [
+        rcp:java "17" ;
+        rcp:springBoot "3.3.5" ;
+        rcp:springCloud "2023.0.3" ;
+        rcp:springCloudAlibaba "2023.0.3.4" ;
+        rcp:mavenSurefire "3.2.5"
+    ] ;
+    rcp:discovery [
+        rcp:discoveryKind "nacos" ;
+        rcp:discoveryState "wired" ;
+        rcp:server "${NACOS_SERVER:nacos:8848}" ;
+        rcp:namespace "risk-control" ;
+        rcp:discoveryGroup "DEFAULT_GROUP" ;
+        rcp:fallback "k8s-dns" ;
+        rcp:note "接线已完成：7 个 Java 服务引入 nacos-discovery 依赖并按占位符注册，网关经 DiscoveryClient 按服务名解析（多实例轮转），endpoints 仅作兜底；清单中不再出现上游地址（RL-007 例外已随收尾删除）。本平台为 demo 定位，未做运行时标定，行为验证以 mvn test 与寻址单测为准，见 rcp-contracts/docs/DISCOVERY.md。" ;
+        rdfs:comment "服务发现的形态与进度。state=wired 表示运行时代码已按服务名解析。" ;
+    ] .

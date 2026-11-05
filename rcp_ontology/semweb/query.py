@@ -1,20 +1,24 @@
-"""L4 SPARQL：属性路径查询，替代手写 BFS。
+"""L4 SPARQL：属性路径查询。
 
 rdflib 内建 SPARQL 引擎支持属性路径（dependsOn+ / dependsOn*），一步到闭包，
-无需推理机。与 reasoner 物化、graph.py BFS 三者对同一结论交叉验证：
+无需推理机。
 
-    graph.py 的 reachable_from   —— 手写 BFS
-    reasoner 的 owlrl 物化       —— 推理机推导
-    query.py 的属性路径 dependsOn+ —— SPARQL 图遍历
+与 graph.py 的 BFS 是两条不同口径，都要留：
 
-三者应给出相同的传递闭包。
+    graph.py 的 reachable_from   —— 按关系所属图分域算，支持 impact --graph <域>
+    本模块的 dependsOn+          —— 只覆盖 exporter 物化了汇总边的可达性图
+
+差别来源：exporter 只为可达性图产出 dependsOn 汇总边，非可达性图（数据、构建、
+部署、治理）按设计只产出 typed 边，它们的边不得进入可达性计算。因此两者**在可达性
+图上必须给出相同闭包**，由 tests/test_semweb.py 对真实登记逐服务校验；出了可达性图，
+本模块不适用，这不是缺陷而是分域语义的必然结果。
 """
 
 from __future__ import annotations
 
 from rdflib import Graph
 
-from .namespaces import RCP
+from ..namespaces import RCP
 
 
 def _local(s: str) -> str:

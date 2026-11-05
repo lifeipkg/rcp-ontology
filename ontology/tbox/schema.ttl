@@ -1,0 +1,198 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 本体骨架：本平台世界里有哪些"类"，类之间用哪些"属性"相连。
+#
+# 这一层只声明词汇（TBox 的元层），不放任何实例。实例在 tbox/ 的其余文件与 abox/。
+# 判据：一个谓词若没有在这里声明 domain/range，它就不是平台词汇，而是拼错。
+#
+# 本体分五层，目录即层名：
+#   tbox/    概念 —— 存在什么（种类、能力、决策、关系、术语）
+#   abox/    实例 —— 本平台登记了什么（服务、库、边、平台配置）
+#   policy/  规则 —— 什么算违规（红线与例外）
+#   shapes/  约束 —— 图形状（SHACL）
+# ─────────────────────────────────────────────────────────────────────────────
+
+<https://risk-control.platform/ontology>
+    a owl:Ontology ;
+    rdfs:label "风控平台本体" ;
+    rdfs:comment "本目录下的 TTL 是平台声明层的唯一真源；契约仓只保留接口契约（OpenAPI 与消息 schema）。" ;
+    owl:versionInfo "2.0.0" .
+
+# ── 类：实体 ────────────────────────────────────────────────────────────────
+
+rcp:Platform    a owl:Class ; rdfs:label "平台" ;
+                rdfs:comment "平台标识与运行配置（版本钉、服务发现）。" .
+
+rcp:Service     a owl:Class ; rdfs:label "服务" ;
+                rdfs:comment "参与运行时数据面的 HTTP 服务。种类由 rdf:type 表达。" .
+
+rcp:Library     a owl:Class ; rdfs:label "库" ;
+                rdfs:comment "编译期依赖的构件，不登记端口、不参与探活与降级。" .
+
+rcp:Kind        a owl:Class ; rdfs:label "种类" ;
+                rdfs:comment "服务的种类。既是 owl:Class（登记用 rdf:type 归类），又是 rcp:Kind 实例（承载行为属性）。" .
+
+rcp:Capability  a owl:Class ; rdfs:label "能力" ;
+                rdfs:comment "可被服务或库实现的功能单元，owner 由 rcp:implementedBy 唯一确定。" .
+
+rcp:Decision    a owl:Class ; rdfs:label "决策等级" ;
+                rdfs:comment "处置等级枚举，唯一真源。分值由 rcp:baseScore 给出。" .
+
+rcp:Term        a owl:Class ; rdfs:label "术语" ;
+                rdfs:comment "业务叫法与概念的对应关系。立名先于实现。" .
+
+rcp:RelationKind a owl:Class ; rdfs:label "关系种类" ;
+                 rdfs:comment "关系名即谓词 local name（calls / queries …）。" .
+
+rcp:RelationGraph a owl:Class ; rdfs:label "关系图" ;
+                  rdfs:comment "边的分域图。环与可达性只在 reachability=true 的图上判。" .
+
+# ── 类：规则 ────────────────────────────────────────────────────────────────
+
+rcp:Redline     a owl:Class ; rdfs:label "架构红线" ;
+                rdfs:comment "可机械检查的硬约束。无 rcp:spec 即纸面红线（E301）。" .
+
+rcp:Exception   a owl:Class ; rdfs:label "红线例外" ;
+                rdfs:comment "无法立即消除的偏离。必须带 scope/match/reason/owner/reviewBy，过期自动转红。" .
+
+# 检查规格的类型。类名转 kebab 即 spec.type（FileScan → file-scan），
+# 检查器据此选择执行器；新增类型 = 新增一个类 + 一个执行器。
+rcp:RegistryAssert a owl:Class ; rdfs:label "登记断言" ;
+                   rdfs:comment "判定由 TBox 种类属性承载，spec 只指明 via。" .
+rcp:CrossSource    a owl:Class ; rdfs:label "跨源比对" ;
+                   rdfs:comment "多份来源逐字比对（决策枚举、分值）。" .
+rcp:FileScan       a owl:Class ; rdfs:label "文件扫描" ;
+                   rdfs:comment "按后缀遍历工作区，正则命中即报。" .
+rcp:RegistryScan   a owl:Class ; rdfs:label "登记遍历扫描" ;
+                   rdfs:comment "按登记遍历仓并抽取构建依赖。" .
+rcp:UpstreamScan   a owl:Class ; rdfs:label "上游地址扫描" ;
+                   rdfs:comment "部署清单里的写死地址与例外复审。" .
+
+# ── 类：平台配置 ─────────────────────────────────────────────────────────────
+
+rcp:StackBaseline    a owl:Class ; rdfs:label "基座版本基线" .
+rcp:ServiceDiscovery a owl:Class ; rdfs:label "服务发现配置" .
+
+# ── 属性：对象属性 ───────────────────────────────────────────────────────────
+
+# 可达性汇总边。由导出器从 calls/publishes/subscribes 物化（见 tbox/relations.ttl），
+# 真源里不写。声明为传递属性，是给外部工具与 SPARQL 属性路径看的：本仓不跑推理机，
+# 生产路径的闭包由导出器一次性物化汇总边得到，不经推理。
+rcp:dependsOn     a owl:ObjectProperty, owl:TransitiveProperty ;
+                  rdfs:domain rcp:Service ;
+                  rdfs:range  rcp:Service .
+
+rcp:hasCapability a owl:ObjectProperty ;
+                  rdfs:domain rcp:Service ;
+                  rdfs:range  rcp:Capability .
+
+# 能力归属：目标是实现该能力的服务或库的实例 IRI，不是字符串，便于反向查询。
+# 与 rcp:owner（服务→负责团队）是两个轴：owner 回答"谁负责"，本属性回答"谁实现"。
+rcp:implementedBy a owl:ObjectProperty ;
+                  rdfs:domain rcp:Capability ;
+                  rdfs:range  owl:Thing .
+
+# 种类白名单：目标必须是已声明的 kind（E113 判据）。
+rcp:allowsDependsOn a owl:ObjectProperty ;
+                    rdfs:domain rcp:Kind ;
+                    rdfs:range  rcp:Kind .
+
+# 术语覆盖的种类（文档价值；W303 已裁，检查器不读它）。
+rcp:covers a owl:ObjectProperty ;
+           rdfs:domain rcp:Term ;
+           rdfs:range  rcp:Kind .
+
+# 例外指向被豁免的红线。
+rcp:redline a owl:ObjectProperty ;
+            rdfs:domain rcp:Exception ;
+            rdfs:range  rcp:Redline .
+
+# 以下四个是"指向结构"的对象属性：目标是空白节点（内嵌结构），不是字面量。
+rcp:expected a owl:ObjectProperty ; rdfs:domain rcp:Service .
+rcp:stack    a owl:ObjectProperty ; rdfs:domain rcp:Platform ; rdfs:range rcp:StackBaseline .
+rcp:discovery a owl:ObjectProperty ; rdfs:domain rcp:Platform ; rdfs:range rcp:ServiceDiscovery .
+rcp:spec     a owl:ObjectProperty ; rdfs:domain rcp:Redline .
+
+# ── 属性：数据类型属性 ───────────────────────────────────────────────────────
+
+rcp:port          a owl:DatatypeProperty ; rdfs:range xsd:integer .
+rcp:external      a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:repo          a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:owner         a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:artifact      a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:name          a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:health        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:contract      a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:definition    a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:meaning       a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:baseScore     a owl:DatatypeProperty ; rdfs:range xsd:integer .
+
+# 种类行为属性：检查器判定的全部依据（见 README 的属性表）。
+rcp:mustBeExternal   a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:isEntry          a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:requiresPort     a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:requiresContract a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+
+# 平台登记头。
+rcp:registrySchema a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:platformName   a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:updated        a owl:DatatypeProperty ; rdfs:range xsd:date .
+
+# 平台配置：版本钉与服务发现。
+rcp:java               a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:springBoot         a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:springCloud        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:springCloudAlibaba a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:mavenSurefire      a owl:DatatypeProperty ; rdfs:range xsd:string .
+
+rcp:discoveryKind  a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:discoveryState a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:server         a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:namespace      a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:discoveryGroup a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:fallback       a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:note           a owl:DatatypeProperty ; rdfs:range xsd:string .
+
+# 预期状态（expected）：区分"有意无下游"与"漏登记依赖方"。
+rcp:noDependents a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:unreachable  a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:reason       a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:reviewBy     a owl:DatatypeProperty ; rdfs:range xsd:date .
+
+# 关系声明。
+rcp:graph      a owl:ObjectProperty ; rdfs:range rcp:RelationGraph .
+rcp:status     a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:reachability a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:sourceKind a owl:ObjectProperty .
+rcp:targetKind a owl:ObjectProperty .
+
+# 术语。
+rcp:slug a owl:DatatypeProperty ; rdfs:range xsd:string .
+
+# 红线与例外。
+rcp:redlineId   a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:rationale   a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:rule        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:scope       a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:match       a owl:DatatypeProperty ; rdfs:range xsd:string .
+
+# 检查规格参数（spec 空白节点上的键；解析时 local name 转 snake_case 即字典键）。
+rcp:via            a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:source         a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:assert         a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:include        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:allowPrefixes  a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:allowKinds     a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:scanPrefix     a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:extract        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:denyValues     a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:internalHosts  a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:caseInsensitive a owl:DatatypeProperty ; rdfs:range xsd:boolean .
+rcp:message        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:messageExpired a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:messageExcepted a owl:DatatypeProperty ; rdfs:range xsd:string .

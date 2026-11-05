@@ -1,8 +1,8 @@
-"""TBox 的 TTL 真源：装载、护栏与"单一编辑面"回归。
+"""TBox 层（ontology/tbox/）：装载、护栏与"单一编辑面"回归。
 
 两类用例：
 
-1. 正向：真实 ``concepts/tbox.ttl`` 能还原成检查层要的字典视图，且与登记里的种类对齐。
+1. 正向：真实 ``ontology/tbox/`` 能还原成检查层要的字典视图，且与登记里的种类对齐。
 2. 反向：每条护栏各一条反例——功能属性多值、kind 不是类、缺行为属性、能力归属多值、
    缺分值、能力名不合规。规则没有反例等于没验证过（同 AGENTS.md 的约定）。
 """
@@ -14,13 +14,16 @@ from pathlib import Path
 
 import pytest
 
-from rcp_ontology.concepts_ttl import ConceptsTTLError, TBOX_FILE, parse_concepts
+from rdflib import Graph
+
+from rcp_ontology.tbox import TboxError, parse_tbox
 from rcp_ontology.checks import check_capability_naming
 from rcp_ontology.loader import load_concepts
 from rcp_ontology.semweb import build_rdf, validate_all
 
 ROOT = Path(__file__).resolve().parent.parent
-CONCEPTS_DIR = ROOT / "concepts"
+TBOX_DIR = ROOT / "ontology" / "tbox"
+TBOX_FILE = "tbox.ttl"
 ONTOLOGY_DIR = ROOT / "ontology"
 
 PREFIX = """
@@ -29,6 +32,12 @@ PREFIX = """
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 """
+
+
+def _parse(path: Path):
+    """单文件夹具：读成图再解析，与装载器的合并图路径同构。"""
+    graph = Graph().parse(path, format="turtle")
+    return parse_tbox(graph, path.name), graph
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -57,7 +66,7 @@ def _gateway(**overrides) -> str:
 
 
 def test_real_tbox_loads_three_layers():
-    concepts = load_concepts(CONCEPTS_DIR)
+    concepts = load_concepts(ROOT)
     assert len(concepts["kinds"]) == 6
     assert len(concepts["capabilities"]) == 14
     assert len(concepts["decisions"]) == 6
@@ -68,9 +77,9 @@ def test_dict_view_matches_tbox_graph():
     from rdflib.namespace import RDF
 
     from rcp_ontology.namespaces import RCP
-    from rcp_ontology.registry_ttl import kebab
+    from rcp_ontology.abox import kebab
 
-    concepts = load_concepts(CONCEPTS_DIR)
+    concepts = load_concepts(ROOT)
     graph = concepts["tbox_graph"]
     by_class = {kebab(str(s).rsplit("#", 1)[-1]): s for s in graph.subjects(RDF.type, RCP.Kind)}
     for kind in concepts["kinds"]:
@@ -89,7 +98,7 @@ def test_dict_view_matches_tbox_graph():
 
 def test_decisions_sorted_by_score():
     """RL-003 是逐字比对，顺序必须确定：按分值升序，与契约层 enum 顺序一致。"""
-    concepts = load_concepts(CONCEPTS_DIR)
+    concepts = load_concepts(ROOT)
     scores = [d["base_score"] for d in concepts["decisions"]]
     assert scores == sorted(scores)
     assert [d["code"] for d in concepts["decisions"]][0] == "PASS"
@@ -97,15 +106,10 @@ def test_decisions_sorted_by_score():
 
 def test_capabilities_point_at_registered_entities():
     """能力的实现者必须是登记里的实体名——否则 E111 会报，但这里先给出可读的失败。"""
-    concepts = load_concepts(CONCEPTS_DIR)
-    contracts = Path(
-        os.environ.get("RCP_CONTRACTS") or ROOT.parent / "rcp-contracts"
-    )
-    if not contracts.is_dir():
-        pytest.skip("工作区无 rcp-contracts")
+    concepts = load_concepts(ROOT)
     from rcp_ontology.loader import load_registry
 
-    registry = load_registry(contracts)
+    registry = load_registry(ROOT)
     names = {s.get("name") for s in registry["services"]} | {
         l.get("name") for l in registry["libraries"]
     }
@@ -114,27 +118,25 @@ def test_capabilities_point_at_registered_entities():
 
 def test_every_registered_kind_is_declared():
     """登记用的每个 kind 都必须在 TBox 里声明（E201 的装载层等价检查）。"""
-    contracts = Path(os.environ.get("RCP_CONTRACTS") or ROOT.parent / "rcp-contracts")
-    if not contracts.is_dir():
-        pytest.skip("工作区无 rcp-contracts")
     from rcp_ontology.loader import load_registry
 
-    declared = {k["name"] for k in load_concepts(CONCEPTS_DIR)["kinds"]}
-    used = {s.get("kind") for s in load_registry(contracts)["services"]}
+    declared = {k["name"] for k in load_concepts(ROOT)["kinds"]}
+    used = {s.get("kind") for s in load_registry(ROOT)["services"]}
     assert used <= declared
 
 
 def test_tbox_is_the_only_concept_source():
     """单一编辑面：概念目录只有 tbox.ttl，旧的 rcp.ttl 不得复活。"""
-    assert sorted(p.name for p in CONCEPTS_DIR.iterdir() if p.is_file()) == [TBOX_FILE]
+    files = [p.name for p in TBOX_DIR.iterdir() if p.is_file()]
+    assert files and all(name.endswith(".ttl") for name in files)
     assert not (ONTOLOGY_DIR / "rcp.ttl").exists()
 
 
 def test_functional_boolean_multi_value_rejected(tmp_path):
     body = _gateway(requiresPort="true, false")
     path = _write(tmp_path, body)
-    with pytest.raises(ConceptsTTLError, match="只允许一个值"):
-        parse_concepts(path)
+    with pytest.raises(TboxError, match="只允许一个值"):
+        _parse(path)
 
 
 def test_kind_must_be_owl_class(tmp_path):
@@ -145,22 +147,22 @@ def test_kind_must_be_owl_class(tmp_path):
         "    rcp:requiresPort true ; rcp:requiresContract true .\n"
     )
     path = _write(tmp_path, body)
-    with pytest.raises(ConceptsTTLError, match="owl:Class"):
-        parse_concepts(path)
+    with pytest.raises(TboxError, match="owl:Class"):
+        _parse(path)
 
 
 def test_missing_behaviour_property_is_none_not_default(tmp_path):
     """缺行为属性必须留 None：补默认会让 E113 永不触发，检查器行为静默退化。"""
     path = _write(tmp_path, _gateway(mustBeExternal=None))
-    concepts, _ = parse_concepts(path)
+    concepts, _ = _parse(path)
     assert concepts["kinds"][0]["must_be_external"] is None
 
 
 def test_missing_behaviour_property_triggers_e113(tmp_path):
     path = _write(tmp_path, _gateway(mustBeExternal=None))
-    concepts, graph = parse_concepts(path)
+    concepts, graph = _parse(path)
     merged = build_rdf({"services": [], "libraries": []}, {**concepts, "tbox_graph": graph})
-    conforms, findings = validate_all(merged, ONTOLOGY_DIR / "constraints.ttl", concepts)
+    conforms, findings = validate_all(merged, ONTOLOGY_DIR / "shapes" / "core.ttl", concepts)
     assert conforms is False
     assert any(f.code == "E113" for f in findings)
 
@@ -172,14 +174,14 @@ def test_capability_implementer_multi_value_rejected(tmp_path):
         "    rcp:implementedBy rcp:api-gateway, rcp:content-patrol .\n"
     )
     path = _write(tmp_path, body)
-    with pytest.raises(ConceptsTTLError, match="只允许一个值"):
-        parse_concepts(path)
+    with pytest.raises(TboxError, match="只允许一个值"):
+        _parse(path)
 
 
 def test_decision_without_score_is_none(tmp_path):
     body = 'rcp:PASS a rcp:Decision ; rdfs:label "放行" .\n'
     path = _write(tmp_path, body)
-    concepts, _ = parse_concepts(path)
+    concepts, _ = _parse(path)
     assert concepts["decisions"][0]["base_score"] is None
 
 

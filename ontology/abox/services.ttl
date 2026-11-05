@@ -1,0 +1,153 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 登记真源（ABox）。服务、库、边、预期状态只在本文件声明。
+#
+# 平台标识、版本钉与服务发现在 abox/platform.ttl —— 同一目录，同一层。
+#
+# 四条书写约定（违反会被 check 判红或装载失败）：
+#   1. 实例 IRI 的 local name 就是服务名，不另写 rcp:name —— 同一事实只有一个位置。
+#   2. 种类用 rdf:type 表达（rcp:Gateway / rcp:PatrolLine …），不写 kind 字面量。
+#      OWL 的类归属就是种类，SHACL 的 sh:targetClass 也直接命中。
+#   3. 边只写具体关系（rcp:calls / rcp:queries …），不写汇总谓词 dependsOn。
+#      汇总边是可推导的结论（calls rdfs:subPropertyOf dependsOn），写进真源
+#      等于把结论当事实，且与 tbox/relations.ttl 的公理重复。
+#   4. port / repo / owner / external / health / artifact 是功能属性，只允许一个值。
+#      RDF 本身允许多值，所以装载器会显式检测多值并报错。
+#
+# 条目按服务名排列：RDF 图无序，固定书写顺序才能让 diff 与渲染产物稳定。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 服务 ────────────────────────────────────────────────────────────────
+# external true 表示允许被工作区外部直接访问；其余只允许集群内互调。
+
+rcp:account-patrol
+    a rcp:PatrolLine, rcp:Service ;
+    rcp:repo "rcp-account-patrol" ;
+    rcp:port 8083 ;
+    rcp:external false ;
+    rcp:owner "risk-account" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:patrol.account.rule ;
+    rcp:contract "contracts/openapi/account-patrol.yaml" .
+
+rcp:api-gateway
+    a rcp:Gateway, rcp:Service ;
+    rcp:repo "rcp-api-gateway" ;
+    rcp:port 8080 ;
+    rcp:external true ;
+    rcp:owner "platform" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:patrol.dispatch, rcp:patrol.domains ;
+    rcp:calls rcp:account-patrol, rcp:content-patrol,
+              rcp:fund-patrol, rcp:message-patrol ;
+    rcp:contract "contracts/openapi/api-gateway.yaml" .
+
+rcp:content-patrol
+    a rcp:PatrolLine, rcp:Service ;
+    rcp:repo "rcp-content-patrol" ;
+    rcp:port 8081 ;
+    rcp:external false ;
+    rcp:owner "risk-content" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:patrol.content.dedup ;
+    rcp:contract "contracts/openapi/content-patrol.yaml" .
+
+# 元仓：不参与运行时数据面，无端口、不部署、不挂 OpenAPI。
+# 登记它们的目的是让 owner 与仓边界有唯一出处，否则 E107 无法区分
+# "有意游离"与"漏登记"。元仓不挂 rcp:Service，避免被服务形状误判为缺端口。
+rcp:contracts
+    a rcp:Meta ;
+    rcp:repo "rcp-contracts" ;
+    rcp:external false ;
+    rcp:owner "platform" .
+
+rcp:dataway
+    a rcp:DataGateway, rcp:Service ;
+    rcp:repo "rcp-dataway" ;
+    rcp:port 8090 ;
+    rcp:external false ;
+    rcp:owner "platform" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:data.execute, rcp:data.query ;
+    rcp:contract "contracts/openapi/dataway.yaml" ;
+    # 数据面尚未启用：巡查线尚未接 data.query/data.execute，故当前无下游、不可达。
+    rcp:expected [
+        rcp:noDependents true ;
+        rcp:unreachable true ;
+        rcp:reason "数据面尚未启用；待 discovery 接入后由 api-gateway 挂依赖" ;
+        rcp:owner "platform" ;
+        rcp:reviewBy "2027-03-31"^^xsd:date
+    ] .
+
+rcp:db-ops
+    a rcp:DbOps, rcp:Service ;
+    rcp:repo "rcp-db-ops" ;
+    rcp:port 8091 ;
+    rcp:external false ;
+    rcp:owner "platform" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:schema.migrate, rcp:schema.version ;
+    rcp:contract "contracts/openapi/db-ops.yaml" ;
+    # 迁移执行器暂由平台侧手动/脚本调用，尚未有运行时服务依赖它。
+    rcp:expected [
+        rcp:noDependents true ;
+        rcp:unreachable true ;
+        rcp:reason "迁移执行器暂由平台侧手动调用；待接入后由 data-gateway/ops 流程挂依赖" ;
+        rcp:owner "platform" ;
+        rcp:reviewBy "2027-03-31"^^xsd:date
+    ] .
+
+rcp:fund-patrol
+    a rcp:PatrolLine, rcp:Service ;
+    rcp:repo "rcp-fund-patrol" ;
+    rcp:port 8084 ;
+    rcp:external false ;
+    rcp:owner "risk-fund" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:patrol.fund.rule ;
+    rcp:contract "contracts/openapi/fund-patrol.yaml" .
+
+rcp:message-patrol
+    a rcp:PatrolLine, rcp:Service ;
+    rcp:repo "rcp-message-patrol" ;
+    rcp:port 8082 ;
+    rcp:external false ;
+    rcp:owner "risk-message" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:patrol.message.ac ;
+    rcp:contract "contracts/openapi/message-patrol.yaml" .
+
+rcp:ontology
+    a rcp:Meta ;
+    rcp:repo "rcp-ontology" ;
+    rcp:external false ;
+    rcp:owner "platform" .
+
+rcp:ops
+    a rcp:Meta ;
+    rcp:repo "rcp-ops" ;
+    rcp:external false ;
+    rcp:owner "platform" .
+
+rcp:web
+    a rcp:Frontend, rcp:Service ;
+    rcp:repo "rcp-web" ;
+    rcp:port 5173 ;
+    rcp:external true ;
+    rcp:owner "platform" ;
+    rcp:health "/" ;
+    rcp:hasCapability rcp:ops.console ;
+    rcp:calls rcp:api-gateway .
+
+# ── 库 ──────────────────────────────────────────────────────────────────
+# 非 HTTP 服务：只被依赖，不登记端口，不参与运行时探活与降级。
+
+rcp:rcp-core
+    a rcp:Library ;
+    rcp:repo "rcp-core" ;
+    rcp:artifact "com.risk.platform:rcp-core:1.0.0" ;
+    rcp:owner "platform" ;
+    rcp:hasCapability rcp:decision.model, rcp:patrol.pipeline, rcp:rule.engine .

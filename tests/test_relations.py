@@ -13,16 +13,15 @@ import pytest
 
 from rcp_ontology import graph as G
 from rcp_ontology.checks import check_dependency_graph, check_relations
-from rcp_ontology.loader import LoadError
+from rcp_ontology.loader import LoadError, load_relations
 from rcp_ontology.relations import (
     kind_class,
-    load_relations,
     reachability_graphs,
     service_relations,
 )
 from rcp_ontology.semweb import build_rdf
 
-ONTOLOGY_DIR = Path(__file__).resolve().parent.parent / "ontology"
+ROOT = Path(__file__).resolve().parent.parent
 
 CONCEPTS = {
     "kinds": [
@@ -46,7 +45,7 @@ CONCEPTS = {
 
 @pytest.fixture(scope="module")
 def relations():
-    return load_relations(ONTOLOGY_DIR)
+    return load_relations(ROOT)
 
 
 def service(name, kind, relations_map=None, depends_on=None, port=8000, **extra):
@@ -168,7 +167,7 @@ def test_e118_relation_without_graph(relations):
         "graphs": relations["graphs"],
         "relations": {"floats": {"name": "floats", "graph": None, "status": "declared",
                                  "sub_property_of": [], "source_kinds": [], "target_kinds": []}},
-        "path": relations["path"],
+        "source": relations["source"],
     }
     findings = check_relations({"services": [], "libraries": []}, broken, CONCEPTS)
     assert any(f.code == "E118" for f in findings)
@@ -186,7 +185,7 @@ def test_s002_when_relations_missing():
     assert [f.code for f in findings] == ["S002"]
 
 
-def test_load_relations_rejects_missing_file(tmp_path):
+def test_load_relations_rejects_missing_layer(tmp_path):
     with pytest.raises(LoadError):
         load_relations(tmp_path)
 

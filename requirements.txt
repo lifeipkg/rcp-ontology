@@ -1,4 +1,12 @@
-PyYAML>=6.0
-pytest>=8.0
+# 真源解析与校验的唯一路径：TTL 装载（rdflib）与 SHACL 约束（pyshacl）。
+# 本体层的所有声明都在这条路径上，不经过 YAML。
 rdflib>=7.0
 pyshacl>=0.40
+
+# PyYAML 的唯一用途：读 rcp-contracts 的**生成物** decision.yaml（RL-003 三方校验
+# 的第三个对端），以及测试里构造该生成物的夹具。真源是 ontology/tbox/decisions.ttl，
+# 任何声明解析都不经过 YAML。保留依赖是为了用外部实现解析生成物，避免
+# 「生成器与解析器同时写错、互相印证」。
+PyYAML>=6.0
+
+pytest>=8.0
