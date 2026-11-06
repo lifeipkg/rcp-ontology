@@ -16,10 +16,11 @@ import pytest
 
 from rdflib import Graph
 
-from rcp_ontology.tbox import TboxError, parse_tbox
-from rcp_ontology.checks import check_capability_naming
-from rcp_ontology.loader import load_concepts
-from rcp_ontology.semweb import build_rdf, validate_all
+from checker.tbox import TboxError, parse_tbox
+from checker.checks import check_capability_naming
+from checker.loader import load_concepts
+from checker.exporter import build_rdf
+from checker.validator import validate_all
 
 ROOT = Path(__file__).resolve().parent.parent
 TBOX_DIR = ROOT / "ontology" / "tbox"
@@ -76,8 +77,8 @@ def test_dict_view_matches_tbox_graph():
     """字典是图的视图：kind 的五个行为属性必须与图上三元组逐项一致。"""
     from rdflib.namespace import RDF
 
-    from rcp_ontology.namespaces import RCP
-    from rcp_ontology.abox import kebab
+    from checker.namespaces import RCP
+    from checker.abox import kebab
 
     concepts = load_concepts(ROOT)
     graph = concepts["tbox_graph"]
@@ -107,7 +108,7 @@ def test_decisions_sorted_by_score():
 def test_capabilities_point_at_registered_entities():
     """能力的实现者必须是登记里的实体名——否则 E111 会报，但这里先给出可读的失败。"""
     concepts = load_concepts(ROOT)
-    from rcp_ontology.loader import load_registry
+    from checker.loader import load_registry
 
     registry = load_registry(ROOT)
     names = {s.get("name") for s in registry["services"]} | {
@@ -118,7 +119,7 @@ def test_capabilities_point_at_registered_entities():
 
 def test_every_registered_kind_is_declared():
     """登记用的每个 kind 都必须在 TBox 里声明（E201 的装载层等价检查）。"""
-    from rcp_ontology.loader import load_registry
+    from checker.loader import load_registry
 
     declared = {k["name"] for k in load_concepts(ROOT)["kinds"]}
     used = {s.get("kind") for s in load_registry(ROOT)["services"]}

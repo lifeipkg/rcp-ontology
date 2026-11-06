@@ -10,7 +10,7 @@ rdflib 内建 SPARQL 引擎支持属性路径（dependsOn+ / dependsOn*），一
 
 差别来源：exporter 只为可达性图产出 dependsOn 汇总边，非可达性图（数据、构建、
 部署、治理）按设计只产出 typed 边，它们的边不得进入可达性计算。因此两者**在可达性
-图上必须给出相同闭包**，由 tests/test_semweb.py 对真实登记逐服务校验；出了可达性图，
+图上必须给出相同闭包**，由 tests/test_rdf.py 对真实登记逐服务校验；出了可达性图，
 本模块不适用，这不是缺陷而是分域语义的必然结果。
 """
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from rdflib import Graph
 
-from ..namespaces import RCP
+from .namespaces import RCP
 
 
 def _local(s: str) -> str:

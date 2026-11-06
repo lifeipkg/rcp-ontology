@@ -38,4 +38,4 @@ jobs:
         run: python -m pytest -q
 
       - name: 一致性检查
-        run: python rcp_ontology/cli.py check --contracts rcp-contracts
+        run: python checker/cli.py check --contracts rcp-contracts

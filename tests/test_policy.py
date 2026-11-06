@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 from rdflib import Graph
 
-from rcp_ontology.checks import check_rule_specs
-from rcp_ontology.loader import load_redlines
-from rcp_ontology.policy import PolicyError, parse_redlines
+from checker.checks import check_rule_specs
+from checker.loader import load_redlines
+from checker.policy import PolicyError, parse_redlines
 
 ROOT = Path(__file__).resolve().parent.parent
 

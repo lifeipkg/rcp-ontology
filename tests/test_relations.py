@@ -11,15 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from rcp_ontology import graph as G
-from rcp_ontology.checks import check_dependency_graph, check_relations
-from rcp_ontology.loader import LoadError, load_relations
-from rcp_ontology.relations import (
+from checker import graph as G
+from checker.checks import check_dependency_graph, check_relations
+from checker.loader import LoadError, load_relations
+from checker.relations import (
     kind_class,
     reachability_graphs,
     service_relations,
 )
-from rcp_ontology.semweb import build_rdf
+from checker.exporter import build_rdf
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -199,7 +199,7 @@ def test_exporter_marks_reachability_with_summary_edge(relations):
     ], "libraries": []}
 
     g = build_rdf(registry, CONCEPTS, relations)
-    from rcp_ontology.namespaces import RCP
+    from checker.namespaces import RCP
 
     assert (RCP["gw"], RCP.calls, RCP["a"]) in g
     assert (RCP["gw"], RCP.dependsOn, RCP["a"]) in g

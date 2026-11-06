@@ -44,7 +44,7 @@
 
 ```bash
 python -m pytest -q
-python rcp_ontology/cli.py check --contracts ../rcp-contracts -w ..
+python checker/cli.py check --contracts ../rcp-contracts -w ..
 ```
 
 反向用例必须覆盖每条红线：新增一条 rule 就要配一条反例测试，否则规则等于没验证过。

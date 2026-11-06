@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from rcp_ontology.checks import (
+from checker.checks import (
     check_capability_ownership,
     check_contracts_exist,
     check_decision_alignment,
@@ -23,14 +23,14 @@ from rcp_ontology.checks import (
     diff_findings,
     workspace_is_complete,
 )
-from rcp_ontology.layout import (
+from checker.layout import (
     is_worktree,
     run_declared_scans,
     run_file_scan,
     run_registry_scan,
     run_upstream_scan,
 )
-from rcp_ontology.loader import Finding, LoadError, SCOPE_DECLARATION, SCOPE_WORKSPACE
+from checker.loader import Finding, LoadError, SCOPE_DECLARATION, SCOPE_WORKSPACE
 
 CONCEPTS = {
     "kinds": [
@@ -668,7 +668,7 @@ def test_duplicate_functional_property_is_load_error(tmp_path: Path):
     """
     from rdflib import Graph
 
-    from rcp_ontology.abox import AboxError, parse_abox
+    from checker.abox import AboxError, parse_abox
 
     graph = Graph().parse(
         data="""@prefix rcp: <https://risk-control.platform/ontology#> .
@@ -698,7 +698,7 @@ def test_real_contracts_repo_is_closed():
                     or Path(__file__).resolve().parent.parent)
     if not (ontology / "ontology").is_dir():
         pytest.skip("工作区无本体仓，跳过集成检查")
-    from rcp_ontology.checks import check_all
+    from checker.checks import check_all
 
     errors = [f for f in check_all(ontology, contracts, workspace) if f.level == "error"]
     assert errors == []
