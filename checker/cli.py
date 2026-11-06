@@ -5,22 +5,22 @@
 
 用法：
     # 一致性检查（-w 指多仓工作区根；不给则跨仓判定输出 S001 明示跳过）
-    python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. [--json]
-    python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. --baseline origin/main
+    python checker/cli.py check --contracts ../rcp-contracts -w .. [--json]
+    python checker/cli.py check --contracts ../rcp-contracts -w .. --baseline origin/main
 
     # 因改声明而受影响的服务
-    python rcp_ontology/cli.py impact --service dataway [--graph data]
-    python rcp_ontology/cli.py relations
-    python rcp_ontology/cli.py owners --org your-org --out .github/CODEOWNERS
-    python rcp_ontology/cli.py render --out SERVICES.md
+    python checker/cli.py impact --service dataway [--graph data]
+    python checker/cli.py relations
+    python checker/cli.py owners --org your-org --out .github/CODEOWNERS
+    python checker/cli.py render --out SERVICES.md
 
     # 语义网层（RDF / OWL / SHACL / SPARQL）
-    python rcp_ontology/cli.py export --out /tmp/services.ttl
-    python rcp_ontology/cli.py shacl
-    python rcp_ontology/cli.py sparql --service dataway
+    python checker/cli.py export --out /tmp/services.ttl
+    python checker/cli.py shacl
+    python checker/cli.py sparql --service dataway
 
     # 派生：由 tbox/decisions.ttl 生成 contracts/schemas/decision.yaml（勿手改生成物）
-    python rcp_ontology/cli.py render-schema --contracts ../rcp-contracts --out ../rcp-contracts/contracts/schemas/decision.yaml
+    python checker/cli.py render-schema --contracts ../rcp-contracts --out ../rcp-contracts/contracts/schemas/decision.yaml
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rcp_ontology import graph as G  # noqa: E402
-from rcp_ontology.checks import check_all, check_declarations, diff_findings  # noqa: E402
-from rcp_ontology.loader import (  # noqa: E402
+from checker import graph as G  # noqa: E402
+from checker.checks import check_all, check_declarations, diff_findings  # noqa: E402
+from checker.loader import (  # noqa: E402
     SCOPE_DECLARATION,
     SCOPE_WORKSPACE,
     Finding,
@@ -48,11 +48,11 @@ from rcp_ontology.loader import (  # noqa: E402
     load_registry,
     load_relations,
 )
-from rcp_ontology.relations import iter_edges, service_relations  # noqa: E402
+from checker.relations import iter_edges, service_relations  # noqa: E402
 
 LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 
-# 本体仓根：cli.py 位于 <repo>/rcp_ontology/cli.py，向上两级即仓根。
+# 本体仓根：cli.py 位于 <repo>/checker/cli.py，向上两级即仓根。
 ONTOLOGY_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -119,7 +119,18 @@ def _run_historical_check(checker_dir: Path, ontology_dir: Path) -> list[Finding
     历史检查器作为独立进程运行（subprocess），完全隔离当前代码与历史代码，
     避免模块缓存/依赖串扰。退出码 0（闭合）与 1（有 error）都算成功产出结论。
     """
-    cli = checker_dir / "rcp_ontology" / "cli.py"
+    # 包目录在改名前后不同：旧 ref 是 rcp_ontology/，新 ref 是 checker/。
+    # 历史基线要能跑改名前的版本，所以两代名字都探测，而不是写死当前名。
+    for pkg in ("checker", "rcp_ontology"):
+        candidate = checker_dir / pkg / "cli.py"
+        if candidate.is_file():
+            cli = candidate
+            break
+    else:
+        raise RuntimeError(
+            f"历史检查器（{checker_dir.name}）里没有 cli.py，"
+            f"既不是 checker/ 也不是 rcp_ontology/"
+        )
     result = subprocess.run(
         [sys.executable, str(cli), "check", "--ontology", str(ontology_dir), "--json"],
         capture_output=True,
@@ -466,7 +477,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    from rcp_ontology.semweb import build_rdf
+    from .exporter import build_rdf
 
     graph = build_rdf(registry, concepts, relations)
     text = graph.serialize(format="turtle")
@@ -486,7 +497,8 @@ def cmd_shacl(args: argparse.Namespace) -> int:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    from rcp_ontology.semweb import build_rdf, validate_all
+    from .exporter import build_rdf
+    from .validator import validate_all
 
     graph = build_rdf(registry, concepts, relations)
     shapes = _ontology_root(args) / "ontology" / "shapes" / "core.ttl"
@@ -515,11 +527,9 @@ def cmd_sparql(args: argparse.Namespace) -> int:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    from rcp_ontology.semweb import (
-        build_rdf,
-        sparql_dependencies_of,
-        sparql_dependents_of,
-    )
+    from .exporter import build_rdf
+    from .query import dependencies_of as sparql_dependencies_of
+    from .query import dependents_of as sparql_dependents_of
 
     graph = build_rdf(registry, concepts, relations)
     name = args.service

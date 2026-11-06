@@ -768,7 +768,8 @@ def check_shacl(
     local name，图上没有可挂 pattern 的字面值）、跨源比对、文件扫描等不在 SHACL
     能力内，仍由本文件其它函数承担。
     """
-    from rcp_ontology.semweb import build_rdf, validate_all
+    from .exporter import build_rdf
+    from .validator import validate_all
 
     shapes_path = Path(__file__).resolve().parent.parent / "ontology" / "shapes" / "core.ttl"
     graph = build_rdf(registry, concepts, relations)

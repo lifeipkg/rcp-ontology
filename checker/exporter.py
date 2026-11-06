@@ -38,8 +38,8 @@ from typing import Any
 from rdflib import BNode, Graph, Literal
 from rdflib.namespace import RDF, RDFS, XSD
 
-from ..relations import kind_class, relation_graph, service_relations
-from ..namespaces import RCP
+from .namespaces import RCP
+from .relations import kind_class, relation_graph, service_relations
 
 __all__ = ["build_rdf", "kind_class"]
 

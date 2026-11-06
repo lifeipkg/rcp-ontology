@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from rcp_ontology.cli import ONTOLOGY_ROOT, _run_historical_check, main
+from checker.cli import ONTOLOGY_ROOT, _run_historical_check, main
 
 TBOX = """@prefix rcp:  <https://risk-control.platform/ontology#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .

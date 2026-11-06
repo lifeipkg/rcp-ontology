@@ -25,7 +25,7 @@ from rdflib import BNode, Graph, Literal
 from rdflib.namespace import RDF, SH, XSD
 
 from .exporter import kind_class
-from ..namespaces import RCP
+from .namespaces import RCP
 
 
 def _rdf_list(g: Graph, items: list) -> object:

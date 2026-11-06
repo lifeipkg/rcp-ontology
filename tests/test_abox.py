@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from rcp_ontology.loader import LoadError, load_registry
+from checker.loader import LoadError, load_registry
 from rdflib import Graph
 
-from rcp_ontology.abox import AboxError, parse_abox
+from checker.abox import AboxError, parse_abox
 
 HEADER = """\
 @prefix rcp:  <https://risk-control.platform/ontology#> .

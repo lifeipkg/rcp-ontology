@@ -15,13 +15,11 @@ from pathlib import Path
 
 from rdflib.namespace import RDF
 
-from rcp_ontology import graph as G
-from rcp_ontology.semweb import (
-    RCP,
-    build_rdf,
-    sparql_dependents_of,
-    validate_all,
-)
+from checker import graph as G
+from checker.exporter import build_rdf
+from checker.namespaces import RCP
+from checker.query import dependents_of as sparql_dependents_of
+from checker.validator import validate_all
 
 ROOT = Path(__file__).resolve().parent.parent
 ONTOLOGY_DIR = ROOT / "ontology"
@@ -110,7 +108,7 @@ def test_sparql_matches_bfs_on_real_registry():
         import pytest
         pytest.skip("工作区无本体仓，跳过集成交叉验证")
 
-    from rcp_ontology.loader import load_concepts, load_registry
+    from checker.loader import load_concepts, load_registry
 
     registry = load_registry(root)
     concepts = load_concepts(root)

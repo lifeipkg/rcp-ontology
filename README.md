@@ -65,10 +65,10 @@ ontology/
 
 - **SHACL** 是「值/关系约束」的唯一实现：依赖登记、依赖白名单、`external` 方向、
   种类/能力声明、TBox 自洽、port/contract 必填。约束来源是 `shapes/core.ttl`（静态）
-  + `semweb/shapes.py`（从 `tbox/kinds.ttl` 编译，规则即数据）。
+  + `shapes.py`（从 `tbox/kinds.ttl` 编译，规则即数据）。
 - **SPARQL 与 `graph.py` 的 BFS 是两条不同口径，两条都留**：`impact --graph <域>`
   按关系所属图分域算闭包，`sparql` 只覆盖可达性图（exporter 只为可达性图物化
-  `dependsOn` 汇总边）。两者在可达性图上必须给出相同闭包，由 `tests/test_semweb.py`
+  `dependsOn` 汇总边）。两者在可达性图上必须给出相同闭包，由 `tests/test_rdf.py`
   对真实登记逐服务校验；出了可达性图 SPARQL 不适用，这是分域语义的结果，不是缺陷。
 
 不跑 OWL 推理机：`tbox/` 里的 `rdfs:subPropertyOf` 与 `owl:TransitiveProperty`
@@ -77,9 +77,9 @@ ontology/
 
 | 技术 | 回答的问题 | 本仓对应 | 命令 |
 |---|---|---|---|
-| RDF | 事实如何描述 | `semweb/exporter.py`：合并声明图 + 物化 `dependsOn` 汇总边 | `cli.py export` |
+| RDF | 事实如何描述 | `exporter.py`：合并声明图 + 物化 `dependsOn` 汇总边 | `cli.py export` |
 | OWL | 概念如何声明 | `tbox/` 的类、`rdfs:subPropertyOf`、`owl:TransitiveProperty` 声明 | 无（不跑推理机） |
-| SHACL | 哪里违规 | `shapes/core.ttl` + `semweb/shapes.py` + `validator.py` | `cli.py shacl` |
+| SHACL | 哪里违规 | `shapes/core.ttl` + `shapes.py` + `validator.py` | `cli.py shacl` |
 | SPARQL | 如何提问 | `query.py`：属性路径 `dependsOn+` | `cli.py sparql` |
 
 导出图会为每条可达性边同时产出 `rcp:calls`（类型化边）与 `rcp:dependsOn`（汇总边）。
@@ -92,39 +92,39 @@ ontology/
 pip install -r requirements.txt
 
 # 一致性检查（-w 指多仓工作区根；不给则跨仓判定输出 S001 明示跳过）
-python rcp_ontology/cli.py check --contracts ../rcp-contracts -w ..
-python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. --json
+python checker/cli.py check --contracts ../rcp-contracts -w ..
+python checker/cli.py check --contracts ../rcp-contracts -w .. --json
 
 # 要求跨仓/跨源判定必须完整执行：有 S001/S003/S004 时退出码 2，防"假绿灯"
-python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. --require-workspace
+python checker/cli.py check --contracts ../rcp-contracts -w .. --require-workspace
 
 # 架构熵基线对比：本体仓在 <ref> 处与当前的声明层结论差集（新增/消失的 error+warn）
-python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. --baseline origin/main
+python checker/cli.py check --contracts ../rcp-contracts -w .. --baseline origin/main
 
 # 历史检查器看历史数据：把"数据漂移"与"规则漂移"解耦
-python rcp_ontology/cli.py check --contracts ../rcp-contracts -w .. \
+python checker/cli.py check --contracts ../rcp-contracts -w .. \
   --baseline origin/main --checker-ref HEAD~1
 
 # 改一个服务之前，先看它会波及谁（--graph 选域：call/data/contract/build/deploy/governance）
-python rcp_ontology/cli.py impact --service dataway
-python rcp_ontology/cli.py impact --service dataway --graph data
+python checker/cli.py impact --service dataway
+python checker/cli.py impact --service dataway --graph data
 
 # 我们到底建模了哪些关系、哪些还只是立了名没有实例
-python rcp_ontology/cli.py relations
+python checker/cli.py relations
 
 # 按 owner 生成 CODEOWNERS（让归属落到审批上）
-python rcp_ontology/cli.py owners --org your-org --out .github/CODEOWNERS
+python checker/cli.py owners --org your-org --out .github/CODEOWNERS
 
 # 渲染服务目录（生成物，勿手改）
-python rcp_ontology/cli.py render --out SERVICES.md
+python checker/cli.py render --out SERVICES.md
 
 # 由真源生成契约层的决策 schema（生成物，勿手改）
-python rcp_ontology/cli.py render-schema --contracts ../rcp-contracts
+python checker/cli.py render-schema --contracts ../rcp-contracts
 
 # 语义网层
-python rcp_ontology/cli.py export --out /tmp/services.ttl
-python rcp_ontology/cli.py shacl
-python rcp_ontology/cli.py sparql --service dataway
+python checker/cli.py export --out /tmp/services.ttl
+python checker/cli.py shacl
+python checker/cli.py sparql --service dataway
 
 # 测试（正向闭合 + 每条约束各一条反例）
 python -m pytest -q
