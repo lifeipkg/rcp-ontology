@@ -91,3 +91,25 @@ def test_impact_reports_unknown_service(tmp_path: Path, capsys):
     ontology = _minimal_ontology(tmp_path)
     assert main(["impact", "--ontology", str(ontology), "--service", "nope"]) == 2
     assert "未登记的服务" in capsys.readouterr().err
+
+
+def test_cli_runs_as_script_not_only_as_module(tmp_path: Path):
+    """以脚本直跑（``python checker/cli.py``）时，命令内部的导入必须是绝对导入。
+
+    这是 semweb 平铺成包根模块时踩过的坑：把 ``from rcp_ontology.semweb import ...``
+    写成 ``from .exporter import ...``，用 ``main([...])`` 跑的测试全绿，真起进程却
+    ``ImportError: attempted relative import with no known parent package`` ——
+    因为脚本模式下 ``__package__`` 为空。只有 subprocess 能覆盖这个差异。
+    """
+    import subprocess
+    import sys
+
+    cli = ONTOLOGY_ROOT / "checker" / "cli.py"
+    target = tmp_path / "services.ttl"
+    result = subprocess.run(
+        [sys.executable, str(cli), "export", "--out", str(target)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert target.read_text(encoding="utf-8").startswith("@prefix")

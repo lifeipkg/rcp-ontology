@@ -477,7 +477,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    from .exporter import build_rdf
+    from checker.exporter import build_rdf
 
     graph = build_rdf(registry, concepts, relations)
     text = graph.serialize(format="turtle")
@@ -497,8 +497,8 @@ def cmd_shacl(args: argparse.Namespace) -> int:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    from .exporter import build_rdf
-    from .validator import validate_all
+    from checker.exporter import build_rdf
+    from checker.validator import validate_all
 
     graph = build_rdf(registry, concepts, relations)
     shapes = _ontology_root(args) / "ontology" / "shapes" / "core.ttl"
@@ -527,9 +527,9 @@ def cmd_sparql(args: argparse.Namespace) -> int:
         print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
         return 2
 
-    from .exporter import build_rdf
-    from .query import dependencies_of as sparql_dependencies_of
-    from .query import dependents_of as sparql_dependents_of
+    from checker.exporter import build_rdf
+    from checker.query import dependencies_of as sparql_dependencies_of
+    from checker.query import dependents_of as sparql_dependents_of
 
     graph = build_rdf(registry, concepts, relations)
     name = args.service
