@@ -303,7 +303,12 @@ def cmd_render(args: argparse.Namespace) -> int:
     stack = registry.get("baseline_stack") or {}
     stack_text = " / ".join(f"{k} {v}" for k, v in stack.items()) or "未声明"
 
-    lines = ["# 平台服务目录（由 rcp-ontology 渲染，勿手改）", "",
+    lines = ["# 平台服务目录（由 rcp-ontology 渲染，勿手改）",
+             "#",
+             "# 真源：rcp-ontology/ontology/abox/services.ttl（服务/库/边）、"
+             "abox/platform.ttl（基座版本钉）。",
+             "# 改登记请改 TTL 后重跑 checker/cli.py render；本文件不是声明真源。",
+             "",
              f"基座版本：{stack_text}", "",
              "## 服务", "",
              "| 服务 | 种类 | 端口 | 对外 | 能力 | 关系 |",

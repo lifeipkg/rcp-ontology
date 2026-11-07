@@ -30,7 +30,7 @@ rcp:Gateway a owl:Class, rcp:Kind ;
     rcp:isEntry true ;
     rcp:requiresPort true ;
     rcp:requiresContract true ;
-    rcp:allowsDependsOn rcp:PatrolLine, rcp:DataGateway, rcp:DbOps .
+    rcp:allowsDependsOn rcp:PatrolLine, rcp:DataGateway, rcp:DbOps, rcp:Iam .
 
 rcp:PatrolLine a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;
@@ -58,6 +58,19 @@ rcp:DbOps a owl:Class, rcp:Kind ;
     rcp:isEntry false ;
     rcp:requiresPort true ;
     rcp:requiresContract true .
+
+# IAM 不依赖任何服务（不写 allowsDependsOn）：它是鉴权链路的源头，被网关调用。
+# 让它反向依赖业务服务，会把"鉴权服务挂掉"扩大成"巡查链也挂掉"。
+rcp:Iam a owl:Class, rcp:Kind ;
+    rdfs:subClassOf rcp:Service ;
+    rdfs:label "身份与访问管理" ;
+    rcp:definition "用户、登录会话与授权判定的唯一真源；只经网关透传对外，令牌只在 IAM 内解释。" ;
+    rcp:mustBeExternal false ;
+    rcp:isEntry false ;
+    rcp:requiresPort true ;
+    rcp:requiresContract true ;
+    # Go 版 IAM 经 dataway 的 HTTP 契约持久化用户与会话，不是直连数据库（RL-005）。
+    rcp:allowsDependsOn rcp:DataGateway .
 
 rcp:Frontend a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;

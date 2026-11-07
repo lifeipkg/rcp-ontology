@@ -42,7 +42,7 @@ rcp:api-gateway
     rcp:health "/actuator/health" ;
     rcp:hasCapability rcp:patrol.dispatch, rcp:patrol.domains ;
     rcp:calls rcp:account-patrol, rcp:content-patrol,
-              rcp:fund-patrol, rcp:message-patrol ;
+              rcp:fund-patrol, rcp:iam, rcp:message-patrol ;
     rcp:contract "contracts/openapi/api-gateway.yaml" .
 
 rcp:content-patrol
@@ -64,6 +64,8 @@ rcp:contracts
     rcp:external false ;
     rcp:owner "platform" .
 
+# 数据面已启用：iam 经本服务读写 iam_users / iam_sessions（RL-005），
+# 故不再声明「预期无下游 / 不可达」。
 rcp:dataway
     a rcp:DataGateway, rcp:Service ;
     rcp:repo "rcp-dataway" ;
@@ -72,15 +74,7 @@ rcp:dataway
     rcp:owner "platform" ;
     rcp:health "/actuator/health" ;
     rcp:hasCapability rcp:data.execute, rcp:data.query ;
-    rcp:contract "contracts/openapi/dataway.yaml" ;
-    # 数据面尚未启用：巡查线尚未接 data.query/data.execute，故当前无下游、不可达。
-    rcp:expected [
-        rcp:noDependents true ;
-        rcp:unreachable true ;
-        rcp:reason "数据面尚未启用；待 discovery 接入后由 api-gateway 挂依赖" ;
-        rcp:owner "platform" ;
-        rcp:reviewBy "2027-03-31"^^xsd:date
-    ] .
+    rcp:contract "contracts/openapi/dataway.yaml" .
 
 rcp:db-ops
     a rcp:DbOps, rcp:Service ;
@@ -109,6 +103,21 @@ rcp:fund-patrol
     rcp:health "/actuator/health" ;
     rcp:hasCapability rcp:patrol.fund.rule ;
     rcp:contract "contracts/openapi/fund-patrol.yaml" .
+
+# 平台唯一 IAM（Go + Gin）。会话落 PostgreSQL，但只经 dataway 的 HTTP 契约，
+# 不持数据库驱动（RL-005）；DDL 只在 rcp-ops/migrations（RL-004）。
+rcp:iam
+    a rcp:Iam, rcp:Service ;
+    rcp:repo "rcp-iam" ;
+    rcp:port 8085 ;
+    rcp:external false ;
+    rcp:owner "platform" ;
+    rcp:health "/actuator/health" ;
+    rcp:hasCapability rcp:iam.auth, rcp:iam.users ;
+    rcp:calls rcp:dataway ;
+    rcp:queries rcp:dataway ;
+    rcp:writes rcp:dataway ;
+    rcp:contract "contracts/openapi/iam.yaml" .
 
 rcp:message-patrol
     a rcp:PatrolLine, rcp:Service ;

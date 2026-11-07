@@ -379,6 +379,96 @@ def test_jdbc_driver_in_data_gateway_is_allowed(tmp_path: Path):
     assert run_registry_scan(JDBC_SPEC, tmp_path, {"services": [DATAWAY], "libraries": []}, "RL-005") == []
 
 
+# Go 版 IAM 引入后，RL-005 必须同时覆盖 go.mod；只扫 pom.xml 会给 Go 服务假绿灯。
+GO_SPEC = {
+    "type": "registry-scan",
+    "include": ["pom.xml", "go.mod"],
+    "extract": "dependency.groupId",
+    "deny_values": [
+        "org.postgresql", "github.com/jackc/pgx", "github.com/jackc/pgx/v5",
+        "github.com/lib/pq", "github.com/go-sql-driver/mysql",
+    ],
+    "allow_kinds": ["data-gateway", "db-ops"],
+    "message": "{repo}（{name}）的 {file} 引入数据库驱动 {group}:{artifact}",
+}
+
+CLEAN_GOMOD = """module github.com/lifeipkg/rcp-iam
+
+go 1.22
+
+require github.com/gin-gonic/gin v1.10.0
+"""
+
+DIRTY_GOMOD = """module github.com/lifeipkg/rcp-iam
+
+go 1.22
+
+require (
+\tgithub.com/gin-gonic/gin v1.10.0
+\tgithub.com/jackc/pgx/v5 v5.6.0 // 直连 PG，违反 RL-005
+)
+"""
+
+
+def test_go_db_driver_in_business_service_is_error(tmp_path: Path):
+    repo = tmp_path / "rcp-iam"
+    repo.mkdir()
+    (repo / "go.mod").write_text(DIRTY_GOMOD, encoding="utf-8")
+    registry = {"services": [service(repo="rcp-iam", name="iam", kind="iam")], "libraries": []}
+    findings = run_registry_scan(GO_SPEC, tmp_path, registry, "RL-005")
+    assert "RL-005" in codes(findings)
+    assert "go.mod" in findings[0].message
+
+
+def test_go_service_without_db_driver_is_clean(tmp_path: Path):
+    repo = tmp_path / "rcp-iam"
+    repo.mkdir()
+    (repo / "go.mod").write_text(CLEAN_GOMOD, encoding="utf-8")
+    registry = {"services": [service(repo="rcp-iam", name="iam", kind="iam")], "libraries": []}
+    assert run_registry_scan(GO_SPEC, tmp_path, registry, "RL-005") == []
+
+
+def test_go_db_driver_in_data_gateway_is_allowed(tmp_path: Path):
+    repo = tmp_path / "rcp-dataway"
+    repo.mkdir()
+    (repo / "go.mod").write_text(DIRTY_GOMOD, encoding="utf-8")
+    assert run_registry_scan(GO_SPEC, tmp_path, {"services": [DATAWAY], "libraries": []}, "RL-005") == []
+
+
+def test_pom_and_gomod_are_both_scanned(tmp_path: Path):
+    """同一仓同时有两种清单时，两处违规都要报，不能只报第一个。"""
+    repo = tmp_path / "rcp-content-patrol"
+    repo.mkdir()
+    (repo / "pom.xml").write_text(_pom_with("org.postgresql", "postgresql"), encoding="utf-8")
+    (repo / "go.mod").write_text(DIRTY_GOMOD, encoding="utf-8")
+    findings = run_registry_scan(GO_SPEC, tmp_path, {"services": [service()], "libraries": []}, "RL-005")
+    assert len(findings) == 2
+    messages = " ".join(f.message for f in findings)
+    assert "pom.xml" in messages and "go.mod" in messages
+
+
+def test_real_rl005_spec_catches_go_driver(tmp_path: Path):
+    """用 policy/redlines.ttl 的真实 spec 验证，而不是测试里另写的合成 spec。"""
+    from checker.loader import load_redlines
+
+    ontology_root = Path(__file__).resolve().parent.parent
+    by_id = {c["id"]: c for c in load_redlines(ontology_root)["constraints"]}
+    spec = by_id["RL-005"]["spec"]
+    assert spec["include"] == ["pom.xml", "go.mod"]
+    assert "github.com/jackc/pgx/v5" in spec["deny_values"]
+
+    repo = tmp_path / "rcp-iam"
+    repo.mkdir()
+    registry = {"services": [service(repo="rcp-iam", name="iam", kind="iam")], "libraries": []}
+    (repo / "go.mod").write_text(DIRTY_GOMOD, encoding="utf-8")
+    findings = run_registry_scan(spec, tmp_path, registry, "RL-005")
+    assert "RL-005" in codes(findings)
+    assert "go.mod" in findings[0].message
+
+    (repo / "go.mod").write_text(CLEAN_GOMOD, encoding="utf-8")
+    assert run_registry_scan(spec, tmp_path, registry, "RL-005") == []
+
+
 def _compose(tmp_path: Path, line: str) -> Path:
     ops = tmp_path / "rcp-ops"
     ops.mkdir()

@@ -24,13 +24,15 @@ rcp:platform
     a rcp:Platform ;
     rcp:registrySchema "rcp.registry/v2" ;
     rcp:platformName "risk-control-platform" ;
-    rcp:updated "2026-11-05"^^xsd:date ;
+    rcp:updated "2026-11-07"^^xsd:date ;
     rcp:stack [
         rcp:java "17" ;
         rcp:springBoot "3.3.5" ;
         rcp:springCloud "2023.0.3" ;
         rcp:springCloudAlibaba "2023.0.3.4" ;
-        rcp:mavenSurefire "3.2.5"
+        rcp:mavenSurefire "3.2.5" ;
+        rcp:go "1.22" ;
+        rcp:gin "1.10.0"
     ] ;
     rcp:discovery [
         rcp:discoveryKind "nacos" ;
@@ -39,6 +41,6 @@ rcp:platform
         rcp:namespace "risk-control" ;
         rcp:discoveryGroup "DEFAULT_GROUP" ;
         rcp:fallback "k8s-dns" ;
-        rcp:note "接线已完成：7 个 Java 服务引入 nacos-discovery 依赖并按占位符注册，网关经 DiscoveryClient 按服务名解析（多实例轮转），endpoints 仅作兜底；清单中不再出现上游地址（RL-007 例外已随收尾删除）。本平台为 demo 定位，未做运行时标定，行为验证以 mvn test 与寻址单测为准，见 rcp-contracts/docs/DISCOVERY.md。" ;
+        rcp:note "接线已完成：8 个 Java 服务（含 iam）引入 nacos-discovery 依赖并按占位符注册，网关经 DiscoveryClient 按服务名解析（多实例轮转），endpoints 仅作兜底；清单中不再出现上游地址（RL-007 例外已随收尾删除）。网关对 IAM 的调用是逐请求内省（iam.auth 的唯一判定点），IAM 不可用时鉴权 fail closed。本平台为 demo 定位，未做运行时标定，行为验证以 mvn test 与寻址单测为准，见 rcp-contracts/docs/DISCOVERY.md。" ;
         rdfs:comment "服务发现的形态与进度。state=wired 表示运行时代码已按服务名解析。" ;
     ] .

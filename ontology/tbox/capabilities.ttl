@@ -41,6 +41,16 @@ rcp:patrol.fund.rule a rcp:Capability ;
     rcp:definition "补贴薅取等资金侧风险规则判定。" ;
     rcp:implementedBy rcp:fund-patrol .
 
+rcp:iam.auth a rcp:Capability ;
+    rdfs:label "身份认证" ;
+    rcp:definition "用户名口令登录、会话签发、令牌内省与吊销；令牌有效性只在 IAM 判定。" ;
+    rcp:implementedBy rcp:iam .
+
+rcp:iam.users a rcp:Capability ;
+    rdfs:label "用户与角色" ;
+    rcp:definition "用户生命周期与角色授予（ADMIN / OPERATOR / VIEWER），含最后一个管理员保护。" ;
+    rcp:implementedBy rcp:iam .
+
 rcp:data.query a rcp:Capability ;
     rdfs:label "声明式查询" ;
     rcp:definition "只读查询，限 SELECT 且限白名单表。" ;

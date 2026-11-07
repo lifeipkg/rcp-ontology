@@ -81,15 +81,20 @@ rcp:RL-005 a rcp:Redline ;
     rcp:slug "business-data-only-via-dataway" ;
     rdfs:label "业务读写只能经 dataway" ;
     rcp:rationale "直连数据库会让连接、权限、审计与限流全部失效。" ;
-    rcp:rule "业务服务仓的 pom 不得引入 JDBC 驱动依赖；数据访问只能通过 dataway 的 HTTP 契约。" ;
+    rcp:rule "业务服务仓不得引入数据库驱动（Java 看 pom.xml，Go 看 go.mod）；数据访问只能通过 dataway 的 HTTP 契约。" ;
     rcp:spec [
         a rcp:RegistryScan ;
-        rcp:include ( "pom.xml" ) ;
+        # Go 版 IAM 引入后必须同时扫 go.mod：只扫 pom.xml 会让 Go 服务拿到假绿灯。
+        rcp:include ( "pom.xml" "go.mod" ) ;
         rcp:extract "dependency.groupId" ;
         rcp:denyValues ( "mysql" "com.mysql" "com.mysql.jdbc" "org.postgresql"
-                         "com.h2database" "com.oracle.database.jdbc" "org.mariadb.jdbc" ) ;
+                         "com.h2database" "com.oracle.database.jdbc" "org.mariadb.jdbc"
+                         "github.com/jackc/pgx" "github.com/jackc/pgx/v5"
+                         "github.com/lib/pq" "github.com/go-sql-driver/mysql"
+                         "github.com/mattn/go-sqlite3" "modernc.org/sqlite"
+                         "gorm.io/driver/postgres" "gorm.io/driver/mysql" ) ;
         rcp:allowKinds ( "data-gateway" "db-ops" ) ;
-        rcp:message "{repo}（{name}）的 pom 引入 JDBC 驱动 {group}:{artifact}；业务读写只能经 dataway 的 HTTP 契约"
+        rcp:message "{repo}（{name}）的 {file} 引入数据库驱动 {group}:{artifact}；业务读写只能经 dataway 的 HTTP 契约"
     ] .
 
 rcp:RL-006 a rcp:Redline ;
