@@ -96,7 +96,7 @@ def test_impact_reports_unknown_service(tmp_path: Path, capsys):
 def test_cli_runs_as_script_not_only_as_module(tmp_path: Path):
     """以脚本直跑（``python checker/cli.py``）时，命令内部的导入必须是绝对导入。
 
-    这是 semweb 平铺成包根模块时踩过的坑：把 ``from rcp_ontology.semweb import ...``
+    这是把语义网层从子包平铺到包根时踩过的坑：把 ``from checker.exporter import ...``
     写成 ``from .exporter import ...``，用 ``main([...])`` 跑的测试全绿，真起进程却
     ``ImportError: attempted relative import with no known parent package`` ——
     因为脚本模式下 ``__package__`` 为空。只有 subprocess 能覆盖这个差异。

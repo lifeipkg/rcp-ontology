@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from rdflib import BNode, Graph, Literal, URIRef
+from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
 
 from .abox import kebab

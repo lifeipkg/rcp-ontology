@@ -31,7 +31,7 @@ from checker.layout import (
     run_registry_scan,
     run_upstream_scan,
 )
-from checker.loader import Finding, LoadError, SCOPE_DECLARATION, SCOPE_WORKSPACE
+from checker.loader import Finding, SCOPE_DECLARATION, SCOPE_WORKSPACE
 
 CONCEPTS = {
     "kinds": [
@@ -171,57 +171,6 @@ def _java_decisions(pairs: list[tuple[str, int]]) -> str:
         consts=",\n".join(f"    {code}" for code, _ in pairs),
         cases="\n".join(f"            case {code} -> {score};" for code, score in pairs),
     )
-
-
-def _workspace_with(tmp_path: Path, *, java: str | None = None, schema: dict | None = None) -> Path:
-    """构造工作区：真源在 CONCEPTS 里，对端落盘为 Java 与生成物 YAML。"""
-    src = tmp_path / "rcp-core" / "src" / "main" / "java" / "com" / "risk" / "platform" / "model"
-    src.mkdir(parents=True)
-    (src / "Decision.java").write_text(
-        java if java is not None else _java_decisions([("PASS", 0), ("INTERCEPT", 80)]),
-        encoding="utf-8",
-    )
-    schemas = tmp_path / "contracts" / "schemas"
-    schemas.mkdir(parents=True)
-    (schemas / "decision.yaml").write_text(
-        yaml.safe_dump(
-            schema if schema is not None
-            else {"enum": ["PASS", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 80}}
-        ),
-        encoding="utf-8",
-    )
-    return tmp_path
-
-
-def test_decision_aligned_across_three_sources(tmp_path: Path):
-    workspace = _workspace_with(tmp_path)
-    assert check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace) == []
-
-
-DECISION_SPEC = {
-    "source": [
-        "ontology/tbox/decisions.ttl",
-        "rcp-core/src/main/java/com/risk/platform/model/Decision.java",
-        "contracts/schemas/decision.yaml",
-    ]
-}
-
-_JAVA = """public enum Decision {{
-{consts};
-
-    public int baseScore() {{
-        return switch (this) {{
-{cases}
-        }};
-    }}
-}}
-"""
-
-
-def _java_decisions(pairs: list[tuple[str, int]]) -> str:
-    consts = ",\n".join(f"    {code}" for code, _ in pairs)
-    cases = "\n".join(f"            case {code} -> {score};" for code, score in pairs)
-    return _JAVA.format(consts=consts, cases=cases)
 
 
 def _workspace_with(tmp_path: Path, *, java: str | None = None, schema: dict | None = None) -> Path:

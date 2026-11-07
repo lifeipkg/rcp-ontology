@@ -13,7 +13,7 @@
 - ``S0xx``    本次检查被跳过的说明，不计入失败
 
 种类相关的判断一律从 TBox 属性取值（requires_port / requires_contract / is_entry），
-不在代码里硬编码种类名。新增种类只需改 concepts/tbox.ttl。
+不在代码里硬编码种类名。新增种类只需改 ontology/tbox/kinds.ttl。
 """
 
 from __future__ import annotations
@@ -570,7 +570,7 @@ def check_relations(
             Finding(
                 "error",
                 "E116",
-                f"关系 {rel} 未在 ontology/relations.ttl 声明，出现在: {', '.join(uses)}",
+                f"关系 {rel} 未在 ontology/tbox/relations.ttl 声明，出现在: {', '.join(uses)}",
             )
         )
 

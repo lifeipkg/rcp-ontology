@@ -9,7 +9,7 @@ RL-007 上游地址）、跨源比对（RL-003）、键存在性、唯一键、�
 SHACL 是闭世界验证：shape 说「缺了/多了/越界了」，报告的就是违规，与 checks.py
 同属「找违规」这一类工作，只是用 W3C 标准语言表达而非 Python。
 
-shapes 分静态（ontology/constraints.ttl）与动态（shapes.py 从 TBox 编译）
+shapes 分静态（ontology/shapes/core.ttl）与动态（shapes.py 从 TBox 编译）
 两类，validate_all 合并二者做完整验证。
 """
 

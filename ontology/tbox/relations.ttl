@@ -56,7 +56,7 @@ rcp:GovernanceGraph a rcp:RelationGraph ;
 
 # ---- 调用图：唯一参与可达性的图 ----
 # 这几条一律 rdfs:subPropertyOf rcp:dependsOn：导出器会为它们同时产出 dependsOn
-# 汇总边，使 dependsOn+ 的推理与 SPARQL 路径闭包保持不变（见 semweb/exporter）。
+# 汇总边，使 dependsOn+ 的推理与 SPARQL 路径闭包保持不变（见 checker/exporter.py）。
 
 rcp:calls a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "calls" ;

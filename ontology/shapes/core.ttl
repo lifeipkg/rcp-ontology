@@ -9,7 +9,7 @@
 #
 #   静态（本文件）：不随 TBox 内容变化的「固定结构约束」。
 #       目标类、路径、必填与否都是固定的，与 kinds/capabilities 的具体条目无关。
-#   动态（semweb/shapes.py）：白名单、external 方向、port/contract 是否必填，
+#   动态（checker/shapes.py）：白名单、external 方向、port/contract 是否必填，
 #       参数来自 tbox/kinds.ttl 的每个 kind，随数据而变。
 #
 # 不在 SHACL 能力内的判定仍由 checks.py 承担：文件扫描类红线（RL-004/005/007）、

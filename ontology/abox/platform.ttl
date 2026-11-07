@@ -6,7 +6,7 @@
 # 平台配置：标识、基座版本钉、服务发现。
 #
 # 这些是平台级单点事实，全工作区只有这一份。消费方式（工作区根）：
-#   python rcp-ontology/rcp_ontology/cli.py render --contracts rcp-contracts --out SERVICES.md
+#   python rcp-ontology/checker/cli.py render --out SERVICES.md
 # 或读本文件：
 #   grep -A6 'rcp:stack' rcp-ontology/ontology/abox/platform.ttl
 #

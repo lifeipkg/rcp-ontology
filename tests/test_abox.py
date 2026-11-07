@@ -13,7 +13,7 @@ import pytest
 from checker.loader import LoadError, load_registry
 from rdflib import Graph
 
-from checker.abox import AboxError, parse_abox
+from checker.abox import parse_abox
 
 HEADER = """\
 @prefix rcp:  <https://risk-control.platform/ontology#> .
