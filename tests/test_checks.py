@@ -17,6 +17,7 @@ from checker.checks import (
     check_declarations,
     check_dependency_graph,
     check_expected_state,
+    check_manifest,
     check_registry_shape,
     check_repo_registration,
     check_rule_specs,
@@ -780,3 +781,133 @@ def test_check_declarations_is_scope_limited(tmp_path: Path):
     assert all(f.scope == SCOPE_DECLARATION for f in findings)
     assert any(f.level == "error" for f in findings)
     assert "E202" in {f.code for f in findings}  # 未立名能力
+
+
+def _write_manifest(
+    root: Path,
+    *,
+    version: str | None = None,
+    version_iri: bool = True,
+    parts: list[str] | None = None,
+    extra: str = "",
+) -> Path:
+    """在 _write_ontology 的产物上补一份 manifest.ttl。
+
+    parts 缺省取磁盘实际文件，构造「清单与事实一致」的正例；反例靠显式传入偏离值。
+    """
+    from checker import loader
+
+    base = root / "ontology"
+    if parts is None:
+        found: list[str] = []
+        for layer in (loader.TBOX_DIR, loader.ABOX_DIR, loader.POLICY_DIR, loader.SHAPES_DIR):
+            directory = base / layer
+            if directory.is_dir():
+                found += [f"{layer}/{p.name}" for p in sorted(directory.glob("*.ttl"))]
+        parts = sorted(found)
+    if version is None:
+        version = loader.__version__
+
+    lines = [
+        "@prefix owl:     <http://www.w3.org/2002/07/owl#> .",
+        "@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .",
+        "@prefix dcterms: <http://purl.org/dc/terms/> .",
+        "",
+        "<https://risk-control.platform/ontology>",
+        "    a owl:Ontology ;",
+        f'    owl:versionInfo "{version}" ;',
+    ]
+    if version_iri:
+        lines.append("    owl:versionIRI <https://risk-control.platform/ontology/2.0.0> ;")
+    if parts:
+        body = " ,\n        ".join(f'"{part}"' for part in parts)
+        lines.append(f"    dcterms:hasPart\n        {body} ;")
+    lines.append('    rdfs:label "test" .')
+    if extra:
+        lines.append(extra)
+
+    path = base / "manifest.ttl"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_manifest_missing_is_skipped_not_failed(tmp_path: Path):
+    """清单是可选文档：缺失只记 S005 跳过，不当违规。"""
+    root = _write_ontology(tmp_path)
+    findings = check_manifest(root)
+    assert [f.code for f in findings] == ["S005"]
+    assert findings[0].level == "info"
+
+
+def test_manifest_consistent_is_closed(tmp_path: Path):
+    root = _write_ontology(tmp_path)
+    _write_manifest(root)
+    assert check_manifest(root) == []
+
+
+def test_manifest_version_drift_is_error(tmp_path: Path):
+    """versionInfo 与 checker 版本双写，漂移必须报。"""
+    root = _write_ontology(tmp_path)
+    _write_manifest(root, version="1.0.0")
+    findings = check_manifest(root)
+    assert "E119" in codes(findings)
+    assert any("漂移" in f.message for f in findings)
+
+
+def test_manifest_without_version_iri_is_error(tmp_path: Path):
+    """没有 versionIRI，外部消费者无法 pin 版本。"""
+    root = _write_ontology(tmp_path)
+    _write_manifest(root, version_iri=False)
+    assert "E119" in codes(check_manifest(root))
+
+
+def test_manifest_declaring_absent_file_is_error(tmp_path: Path):
+    """清单指向空气：声明的路径在磁盘上不存在。"""
+    root = _write_ontology(tmp_path)
+    _write_manifest(root, parts=["tbox/ghost.ttl"])
+    findings = check_manifest(root)
+    assert "E119" in codes(findings)
+    assert any("不存在" in f.message for f in findings)
+
+
+def test_manifest_omitting_existing_file_is_error(tmp_path: Path):
+    """新增文件忘了登记：层目录里有 .ttl 未写进 hasPart。"""
+    root = _write_ontology(tmp_path)
+    _write_manifest(root, parts=["tbox/kinds.ttl"])
+    (tmp_path / "ontology" / "tbox" / "extra.ttl").write_text(
+        "@prefix rcp: <https://risk-control.platform/ontology#> .\n", encoding="utf-8"
+    )
+    findings = check_manifest(root)
+    assert "E119" in codes(findings)
+    assert any("清单遗漏" in f.message for f in findings)
+
+
+def test_manifest_multiple_identities_is_error(tmp_path: Path):
+    """一个本体只有一个身份，两个 owl:Ontology 即声明不可用。"""
+    root = _write_ontology(tmp_path)
+    _write_manifest(root, extra="<https://risk-control.platform/other> a owl:Ontology .")
+    findings = check_manifest(root)
+    assert "E119" in codes(findings)
+    assert any("不可用" in f.message for f in findings)
+
+
+def test_manifest_duplicate_version_info_is_error(tmp_path: Path):
+    """versionInfo 是功能属性，多值即不可用（与 abox/tbox 同一护栏）。"""
+    root = _write_ontology(tmp_path)
+    _write_manifest(
+        root,
+        extra='<https://risk-control.platform/ontology> owl:versionInfo "9.9.9" .',
+    )
+    findings = check_manifest(root)
+    assert "E119" in codes(findings)
+    assert any("功能属性" in f.message for f in findings)
+
+
+def test_real_manifest_is_consistent():
+    """真实仓的清单必须与磁盘一致——这是文档不腐烂的底线。"""
+    import os
+
+    ontology = Path(os.environ.get("RCP_ONTOLOGY") or Path(__file__).resolve().parent.parent)
+    if not (ontology / "ontology").is_dir():
+        pytest.skip("工作区无本体仓")
+    assert check_manifest(ontology) == []

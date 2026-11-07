@@ -1,21 +1,40 @@
-@prefix rcp:  <https://risk-control.platform/ontology#> .
-@prefix owl:  <http://www.w3.org/2002/07/owl#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rcp:     <https://risk-control.platform/ontology#> .
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 本体清单：本仓 ontology/ 目录的唯一入口。
 #
-# 这不是索引文件，而是本体的身份与分层说明。装载器按目录顺序扫描（tbox → abox →
-# policy → shapes，各层内按文件名排序），不读本文件的 imports —— rdflib 不跟随
-# owl:imports，写一个会被忽略的清单比不写更危险。**加载顺序由目录决定**。
+# 这不是装载索引。装载器按目录扫描（tbox → abox → policy → shapes，各层内按文件名
+# 排序），不读本文件的 imports —— rdflib 不跟随 owl:imports，写一个会被忽略的清单
+# 比不写更危险。**加载顺序由目录决定**。
 #
-# 本清单存在的意义：说明每一层为什么在这里，以及新增文件该放哪。
+# 那它做什么？三件事：
+#   1. 声明本体身份（IRI / 版本），供外部系统引用与 pin 版本；
+#   2. dcterms:hasPart 给出文件清单，让"新增文件放哪层"有书面答案；
+#   3. 作为 E119 的校验对象——清单可以人读，但不许与事实脱节。
+#
+# hasPart 用字面量而非相对 IRI：相对 IRI 会按解析时的 base 展开成 file:///...，
+# 换台机器就不可比；字面量是稳定的仓内路径，直接与磁盘比对。
 # ─────────────────────────────────────────────────────────────────────────────
 
 <https://risk-control.platform/ontology>
     a owl:Ontology ;
     rdfs:label "风控平台本体" ;
     owl:versionInfo "2.0.0" ;
+    owl:versionIRI <https://risk-control.platform/ontology/2.0.0> ;
+    dcterms:hasPart
+        "tbox/schema.ttl" ,
+        "tbox/kinds.ttl" ,
+        "tbox/capabilities.ttl" ,
+        "tbox/decisions.ttl" ,
+        "tbox/relations.ttl" ,
+        "tbox/terms.ttl" ,
+        "abox/platform.ttl" ,
+        "abox/services.ttl" ,
+        "policy/redlines.ttl" ,
+        "shapes/core.ttl" ;
     rdfs:comment """唯一真源根。全部声明是 TTL，没有 YAML。
 
 分层（目录即层）：
@@ -39,4 +58,5 @@
     core.ttl          SHACL 静态约束（不随 TBox 变化的固定结构约束）
 
 新增文件放在对应层；跨层的引用只允许"abox 引用 tbox"，不允许反向。
+新增后必须同步上面的 dcterms:hasPart，否则 E119 会报"清单遗漏"。
 """ .

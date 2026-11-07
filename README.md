@@ -14,7 +14,7 @@
 
 ```
 ontology/
-├── manifest.ttl          本体身份与分层说明（人读；加载顺序由目录决定）
+├── manifest.ttl          本体身份 + 文件清单（E119 校验其与磁盘一致）
 ├── tbox/                 概念 —— 存在什么
 │   ├── schema.ttl        类与属性的词汇层（本体的骨架）
 │   ├── kinds.ttl         服务种类 + 五个行为属性
@@ -32,7 +32,8 @@ ontology/
 ```
 
 装载器按目录顺序扫描（`tbox` → `abox` → `policy`），层内按文件名字典序合并成一张图。
-顺序固定是为了同一份声明每次产出相同结论。
+`shapes/` 不参与装载，由 SHACL 直接读取。顺序固定是为了同一份声明每次产出相同结论。
+`manifest.ttl` 位于根目录、不属于任何一层，也不参与装载；它只是身份与清单，由 E119 校验。
 
 ## 为什么全是 TTL
 
@@ -173,6 +174,13 @@ python -m pytest -q
 | E118 | 关系未声明所属图，或引用了未声明的图 | Python | error |
 | W307 | 关系标 `enforced` 但登记里零实例（判定空转） | Python | warn |
 | S002 | 关系层不可用，关系级判定未执行（明示跳过） | Python | info |
+
+### 本体自述
+
+| 编号 | 判据 | 承担 | 级别 |
+|---|---|---|---|
+| E119 | `manifest.ttl` 与事实脱节：`versionInfo` 与检查器版本漂移、缺 `versionIRI`、`hasPart` 指向不存在的文件，或层目录里有 `.ttl` 未登记 | Python | error |
+| S005 | 缺少 `manifest.ttl`，本体身份与文件清单未校验（明示跳过） | Python | info |
 
 ### 红线与元检查
 

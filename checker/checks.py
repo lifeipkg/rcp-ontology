@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from . import graph as G
+from . import loader
 from .layout import is_worktree, run_declared_scans
 from .loader import (
     SCOPE_WORKSPACE,
@@ -501,7 +502,7 @@ def check_relations(
             Finding(
                 "info",
                 "S002",
-                "缺少 ontology/relations.ttl，关系级判定（E116/E117/E118）未执行",
+                "缺少 ontology/tbox/relations.ttl，关系级判定（E116/E117/E118）未执行",
             )
         )
         return findings
@@ -780,6 +781,86 @@ def check_shacl(
     ]
 
 
+def check_manifest(ontology_root: Path) -> list[Finding]:
+    """E119 本体自述清单（ontology/manifest.ttl）与事实一致。
+
+    清单是给人读的分层地图，检查器不靠它装载 —— 加载顺序由目录决定。但既然写了就
+    不能与事实脱节：版本号双写会漂移，文件清单会腐烂，而这两者都不会自己报错。
+
+    只做三件机械比对：
+      - 缺失 → S005 明示跳过，不判违规（清单是可选文档）
+      - versionInfo 与 checker 版本不一致、或缺 versionIRI → 发布身份对不上
+      - hasPart 声明的路径不存在、或层目录里的 .ttl 未被声明 → 清单已骗人
+    """
+    try:
+        manifest = loader.load_manifest(ontology_root)
+    except loader.LoadError as exc:
+        return [Finding("error", "E119", f"manifest.ttl 不可用：{exc}")]
+
+    if manifest is None:
+        return [
+            Finding(
+                "info",
+                "S005",
+                "缺少 ontology/manifest.ttl，本体身份与文件清单未校验",
+            )
+        ]
+
+    findings: list[Finding] = []
+    version = manifest.get("version_info")
+
+    if not version:
+        findings.append(Finding("error", "E119", "manifest.ttl 缺少 owl:versionInfo"))
+    elif version != loader.__version__:
+        findings.append(
+            Finding(
+                "error",
+                "E119",
+                f"manifest.ttl 的 versionInfo={version} 与 checker 版本 "
+                f"{loader.__version__} 不一致：本体身份与检查器版本已漂移",
+            )
+        )
+
+    if not manifest.get("version_iri"):
+        findings.append(
+            Finding(
+                "error",
+                "E119",
+                "manifest.ttl 缺少 owl:versionIRI：外部消费者无法 pin 版本",
+            )
+        )
+
+    declared = set(manifest.get("parts") or [])
+    if not declared:
+        findings.append(
+            Finding("error", "E119", "manifest.ttl 未用 dcterms:hasPart 声明任何文件")
+        )
+        return findings
+
+    base = loader.ontology_root(ontology_root)
+    for part in sorted(declared):
+        if not (base / part).is_file():
+            findings.append(
+                Finding("error", "E119", f"manifest.ttl 声明的文件不存在：{part}")
+            )
+
+    for layer in (loader.TBOX_DIR, loader.ABOX_DIR, loader.POLICY_DIR, loader.SHAPES_DIR):
+        directory = base / layer
+        if not directory.is_dir():
+            continue  # 缺层目录由 load_* 抛 LoadError，不在此重复报
+        for path in sorted(directory.glob("*.ttl")):
+            relative = f"{layer}/{path.name}"
+            if relative not in declared:
+                findings.append(
+                    Finding(
+                        "error",
+                        "E119",
+                        f"清单遗漏：{relative} 存在于磁盘但未写进 manifest.ttl 的 dcterms:hasPart",
+                    )
+                )
+    return findings
+
+
 def check_declarations(
     ontology_root: Path,
     contracts_root: Path | None = None,
@@ -794,7 +875,7 @@ def check_declarations(
     这些检查只依赖声明文件，任何单仓环境都能复算，是架构熵基线对比的范围。
 
     两轨分工：
-      - checks.py 保留：键存在性（E001）、唯一键（E002）、跨源比对（RL-003）、
+      - checks.py 保留：清单自述（E119）、键存在性（E001）、唯一键（E002）、跨源比对（RL-003）、
         契约文件存在（RL-006）、能力命名（E114）、能力归属（E111/E112）、
         expected 形状（E115）、图连通性（E108/E109/E110/W306）、红线元检查（E301/E302）。
       - SHACL 迁移：依赖登记（E105）、依赖白名单（E106/RL-001）、external 方向
@@ -808,6 +889,7 @@ def check_declarations(
     scope_root = workspace_root or Path(ontology_root).resolve().parent
 
     findings: list[Finding] = []
+    findings += check_manifest(ontology_root)
     findings += check_rule_specs(redlines)
     findings += check_relations(registry, relations, concepts)
     findings += check_registry_shape(registry)

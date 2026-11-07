@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from rdflib import Graph
+from rdflib import DCTERMS, OWL, RDF, RDFS, Graph
 
 __version__ = "2.0.0"
 
@@ -36,6 +36,9 @@ TBOX_DIR = "tbox"
 ABOX_DIR = "abox"
 POLICY_DIR = "policy"
 SHAPES_DIR = "shapes"
+
+# 本体自述清单。位于 ontology/ 根而非任何一层，所以不参与层合并。
+MANIFEST_FILE = "manifest.ttl"
 
 # Finding 的作用域：
 #   declaration —— 只读单仓声明即可判定，任何环境都能跑
@@ -173,3 +176,52 @@ def load_redlines(root: Path) -> dict[str, Any]:
     data.setdefault("constraints", [])
     data.setdefault("exceptions", [])
     return data
+
+
+def manifest_path(root: Path) -> Path:
+    """清单文件位置（ontology/manifest.ttl）。"""
+    return ontology_root(root) / MANIFEST_FILE
+
+
+def load_manifest(root: Path) -> dict[str, Any] | None:
+    """读本体自述清单：身份（IRI / 版本）与文件清单。
+
+    清单是可选文档，不参与装载，所以缺失时返回 None 而不是报错 —— 调用方据此输出
+    S005 明示跳过。但一旦存在就必须自洽：``owl:Ontology`` 只能有一个身份，
+    ``versionInfo`` / ``versionIRI`` / ``label`` 是功能属性，多值即报错（与 abox / tbox
+    的多值护栏同一口径，不因换文件就放松）。
+
+    返回值：``iri`` / ``version_info`` / ``version_iri`` / ``label`` 四个字符串（缺省
+    None），以及 ``parts`` —— ``dcterms:hasPart`` 声明的仓内相对路径（已排序）。
+    """
+    path = manifest_path(root)
+    if not path.is_file():
+        return None
+
+    graph = Graph()
+    try:
+        graph.parse(path, format="turtle")
+    except Exception as exc:  # noqa: BLE001 - 语法错误即声明不可用
+        raise LoadError(f"{path} TTL 解析失败: {exc}") from exc
+
+    subjects = sorted(graph.subjects(RDF.type, OWL.Ontology))
+    if not subjects:
+        raise LoadError(f"{path} 未声明 owl:Ontology，无法确定本体身份")
+    if len(subjects) > 1:
+        names = ", ".join(str(s) for s in subjects)
+        raise LoadError(f"{path} 声明了 {len(subjects)} 个 owl:Ontology（{names}），本体只能有一个身份")
+    iri = subjects[0]
+
+    def _single(predicate, field_name: str) -> str | None:
+        values = list(graph.objects(iri, predicate))
+        if len(values) > 1:
+            raise LoadError(f"{path} 的 {field_name} 有 {len(values)} 个值（功能属性只允许一个）")
+        return str(values[0]) if values else None
+
+    return {
+        "iri": str(iri),
+        "label": _single(RDFS.label, "rdfs:label"),
+        "version_info": _single(OWL.versionInfo, "owl:versionInfo"),
+        "version_iri": _single(OWL.versionIRI, "owl:versionIRI"),
+        "parts": sorted(str(part) for part in graph.objects(iri, DCTERMS.hasPart)),
+    }
