@@ -3,6 +3,7 @@
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 本体骨架：本平台世界里有哪些"类"，类之间用哪些"属性"相连。
@@ -17,11 +18,58 @@
 #   shapes/  约束 —— 图形状（SHACL）
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── 本体头（ontology header）────────────────────────────────────────────────
+# 本体的身份与组成部分。这是全仓唯一一处声明本体 IRI 的地方——它属于本体图本身，
+# 会被装载、被 export 输出、被任何 RDF 工具读到，不是图外的配置文件。
+#
+# 不写 owl:imports：rdflib 不跟随它，写一个会被静默忽略的清单比不写更危险。
+# 加载顺序由目录决定（tbox → abox → policy → shapes，层内按文件名排序）。
+#
+# hasPart 用字面量而非相对 IRI：相对 IRI 会按解析时的 base 展开成 file:///...，
+# 换台机器就不可比；字面量是稳定的仓内路径，能直接与磁盘比对。
+# ─────────────────────────────────────────────────────────────────────────────
+
 <https://risk-control.platform/ontology>
     a owl:Ontology ;
     rdfs:label "风控平台本体" ;
-    rdfs:comment "本目录下的 TTL 是平台声明层的唯一真源；契约仓只保留接口契约（OpenAPI 与消息 schema）。" ;
-    owl:versionInfo "2.0.0" .
+    owl:versionInfo "2.0.0" ;
+    owl:versionIRI <https://risk-control.platform/ontology/2.0.0> ;
+    dcterms:hasPart
+        "tbox/schema.ttl" ,
+        "tbox/kinds.ttl" ,
+        "tbox/capabilities.ttl" ,
+        "tbox/decisions.ttl" ,
+        "tbox/relations.ttl" ,
+        "tbox/terms.ttl" ,
+        "abox/platform.ttl" ,
+        "abox/services.ttl" ,
+        "policy/redlines.ttl" ,
+        "shapes/core.ttl" ;
+    rdfs:comment """本目录下的 TTL 是平台声明层的唯一真源；契约仓只保留接口契约（OpenAPI 与消息 schema）。
+
+分层（目录即层）：
+
+  tbox/    概念 —— 存在什么
+    schema.ttl        类与属性的词汇层（本体的骨架，含本体头）
+    kinds.ttl         服务种类及其五个行为属性
+    capabilities.ttl  能力立名与归属
+    decisions.ttl     决策等级与基准分（处置语义唯一真源）
+    relations.ttl     关系种类、分域图与端点约束
+    terms.ttl         业务术语与概念的对应
+
+  abox/    实例 —— 本平台登记了什么
+    platform.ttl      平台标识、基座版本钉、服务发现
+    services.ttl      服务、库、边、预期状态
+
+  policy/  规则 —— 什么算违规
+    redlines.ttl      架构红线（spec 即执行参数）与例外登记
+
+  shapes/  约束 —— 图形状
+    core.ttl          SHACL 静态约束（不随 TBox 变化的固定结构约束）
+
+新增文件放在对应层；跨层的引用只允许"abox 引用 tbox"，不允许反向。
+新增后必须同步上面的 dcterms:hasPart，否则 E119 会报"清单遗漏"。
+""" .
 
 # ── 类：实体 ────────────────────────────────────────────────────────────────
 

@@ -781,68 +781,69 @@ def check_shacl(
     ]
 
 
-def check_manifest(ontology_root: Path) -> list[Finding]:
-    """E119 本体自述清单（ontology/manifest.ttl）与事实一致。
+def check_ontology_header(ontology_root: Path) -> list[Finding]:
+    """E119 本体头（ontology header）与事实一致。
 
-    清单是给人读的分层地图，检查器不靠它装载 —— 加载顺序由目录决定。但既然写了就
-    不能与事实脱节：版本号双写会漂移，文件清单会腐烂，而这两者都不会自己报错。
+    header 声明在 tbox/schema.ttl，属于本体图本身——它会被装载、被 export 输出、
+    被任何 RDF 工具读到，不是图外的配置文件。既然它是本体身份的唯一声明处，缺了它
+    这个目录就只是一堆 TTL，没有任何东西说得出「我是谁、我由哪些文件组成」，所以
+    缺失判 error，不再明示跳过。
 
-    只做三件机械比对：
-      - 缺失 → S005 明示跳过，不判违规（清单是可选文档）
-      - versionInfo 与 checker 版本不一致、或缺 versionIRI → 发布身份对不上
-      - hasPart 声明的路径不存在、或层目录里的 .ttl 未被声明 → 清单已骗人
+    只做四件机械比对：
+      - 缺本体头 / 缺 versionInfo / 缺 versionIRI → 发布身份对不上
+      - versionInfo 与 checker 版本不一致 → 双写漂移
+      - hasPart 声明的路径不存在 → 清单骗人
+      - 层目录里的 .ttl 未被声明 → 清单腐烂
     """
     try:
-        manifest = loader.load_manifest(ontology_root)
+        header = loader.load_header(ontology_root)
     except loader.LoadError as exc:
-        return [Finding("error", "E119", f"manifest.ttl 不可用：{exc}")]
+        return [Finding("error", "E119", f"本体头不可用：{exc}")]
 
-    if manifest is None:
+    if not header.get("iri"):
         return [
             Finding(
-                "info",
-                "S005",
-                "缺少 ontology/manifest.ttl，本体身份与文件清单未校验",
+                "error",
+                "E119",
+                "缺少本体头：tbox/schema.ttl 未声明 owl:Ontology，无法确定本体身份",
             )
         ]
 
     findings: list[Finding] = []
-    version = manifest.get("version_info")
+    version = header.get("version_info")
 
     if not version:
-        findings.append(Finding("error", "E119", "manifest.ttl 缺少 owl:versionInfo"))
+        findings.append(Finding("error", "E119", "本体头缺少 owl:versionInfo"))
     elif version != loader.__version__:
         findings.append(
             Finding(
                 "error",
                 "E119",
-                f"manifest.ttl 的 versionInfo={version} 与 checker 版本 "
+                f"本体头的 versionInfo={version} 与 checker 版本 "
                 f"{loader.__version__} 不一致：本体身份与检查器版本已漂移",
             )
         )
 
-    if not manifest.get("version_iri"):
+    if not header.get("version_iri"):
         findings.append(
             Finding(
                 "error",
                 "E119",
-                "manifest.ttl 缺少 owl:versionIRI：外部消费者无法 pin 版本",
+                "本体头缺少 owl:versionIRI：外部消费者无法 pin 版本",
             )
         )
 
-    declared = set(manifest.get("parts") or [])
+    declared = set(header.get("parts") or [])
     if not declared:
         findings.append(
-            Finding("error", "E119", "manifest.ttl 未用 dcterms:hasPart 声明任何文件")
+            Finding("error", "E119", "本体头未用 dcterms:hasPart 声明任何文件")
         )
         return findings
 
     base = loader.ontology_root(ontology_root)
     for part in sorted(declared):
         if not (base / part).is_file():
-            findings.append(
-                Finding("error", "E119", f"manifest.ttl 声明的文件不存在：{part}")
-            )
+            findings.append(Finding("error", "E119", f"本体头声明的文件不存在：{part}"))
 
     for layer in (loader.TBOX_DIR, loader.ABOX_DIR, loader.POLICY_DIR, loader.SHAPES_DIR):
         directory = base / layer
@@ -855,7 +856,7 @@ def check_manifest(ontology_root: Path) -> list[Finding]:
                     Finding(
                         "error",
                         "E119",
-                        f"清单遗漏：{relative} 存在于磁盘但未写进 manifest.ttl 的 dcterms:hasPart",
+                        f"清单遗漏：{relative} 存在于磁盘但未写进 dcterms:hasPart",
                     )
                 )
     return findings
@@ -875,7 +876,7 @@ def check_declarations(
     这些检查只依赖声明文件，任何单仓环境都能复算，是架构熵基线对比的范围。
 
     两轨分工：
-      - checks.py 保留：清单自述（E119）、键存在性（E001）、唯一键（E002）、跨源比对（RL-003）、
+      - checks.py 保留：本体头（E119）、键存在性（E001）、唯一键（E002）、跨源比对（RL-003）、
         契约文件存在（RL-006）、能力命名（E114）、能力归属（E111/E112）、
         expected 形状（E115）、图连通性（E108/E109/E110/W306）、红线元检查（E301/E302）。
       - SHACL 迁移：依赖登记（E105）、依赖白名单（E106/RL-001）、external 方向
@@ -889,7 +890,7 @@ def check_declarations(
     scope_root = workspace_root or Path(ontology_root).resolve().parent
 
     findings: list[Finding] = []
-    findings += check_manifest(ontology_root)
+    findings += check_ontology_header(ontology_root)
     findings += check_rule_specs(redlines)
     findings += check_relations(registry, relations, concepts)
     findings += check_registry_shape(registry)

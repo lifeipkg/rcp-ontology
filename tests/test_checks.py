@@ -17,7 +17,7 @@ from checker.checks import (
     check_declarations,
     check_dependency_graph,
     check_expected_state,
-    check_manifest,
+    check_ontology_header,
     check_registry_shape,
     check_repo_registration,
     check_rule_specs,
@@ -732,7 +732,7 @@ def test_check_declarations_is_scope_limited(tmp_path: Path):
     assert "E202" in {f.code for f in findings}  # 未立名能力
 
 
-def _write_manifest(
+def _write_header(
     root: Path,
     *,
     version: str | None = None,
@@ -740,13 +740,19 @@ def _write_manifest(
     parts: list[str] | None = None,
     extra: str = "",
 ) -> Path:
-    """在 _write_ontology 的产物上补一份 manifest.ttl。
+    """在 tbox/schema.ttl 里写本体头。
 
-    parts 缺省取磁盘实际文件，构造「清单与事实一致」的正例；反例靠显式传入偏离值。
+    header 属于本体图本身（不是独立文件），所以写在 tbox 层。parts 缺省取磁盘实际
+    文件——含 schema.ttl 自己，构造「清单与事实一致」的正例；反例靠显式传入偏离值。
     """
     from checker import loader
 
     base = root / "ontology"
+    schema = base / "tbox" / "schema.ttl"
+    if not schema.is_file():
+        # 先落个占位，让下面的磁盘扫描能把它算进 parts
+        schema.write_text("@prefix rcp: <https://risk-control.platform/ontology#> .\n", encoding="utf-8")
+
     if parts is None:
         found: list[str] = []
         for layer in (loader.TBOX_DIR, loader.ABOX_DIR, loader.POLICY_DIR, loader.SHAPES_DIR):
@@ -775,88 +781,105 @@ def _write_manifest(
     if extra:
         lines.append(extra)
 
-    path = base / "manifest.ttl"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return path
+    schema.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return schema
 
 
-def test_manifest_missing_is_skipped_not_failed(tmp_path: Path):
-    """清单是可选文档：缺失只记 S005 跳过，不当违规。"""
+def test_header_missing_is_error(tmp_path: Path):
+    """本体头是本体身份的唯一声明处：缺了它这个目录只是一堆 TTL，判 error。"""
     root = _write_ontology(tmp_path)
-    findings = check_manifest(root)
-    assert [f.code for f in findings] == ["S005"]
-    assert findings[0].level == "info"
+    findings = check_ontology_header(root)
+    assert "E119" in codes(findings)
+    assert any("缺少本体头" in f.message for f in findings)
 
 
-def test_manifest_consistent_is_closed(tmp_path: Path):
+def test_header_consistent_is_closed(tmp_path: Path):
     root = _write_ontology(tmp_path)
-    _write_manifest(root)
-    assert check_manifest(root) == []
+    _write_header(root)
+    assert check_ontology_header(root) == []
 
 
-def test_manifest_version_drift_is_error(tmp_path: Path):
+def test_header_version_drift_is_error(tmp_path: Path):
     """versionInfo 与 checker 版本双写，漂移必须报。"""
     root = _write_ontology(tmp_path)
-    _write_manifest(root, version="1.0.0")
-    findings = check_manifest(root)
+    _write_header(root, version="1.0.0")
+    findings = check_ontology_header(root)
     assert "E119" in codes(findings)
     assert any("漂移" in f.message for f in findings)
 
 
-def test_manifest_without_version_iri_is_error(tmp_path: Path):
+def test_header_without_version_iri_is_error(tmp_path: Path):
     """没有 versionIRI，外部消费者无法 pin 版本。"""
     root = _write_ontology(tmp_path)
-    _write_manifest(root, version_iri=False)
-    assert "E119" in codes(check_manifest(root))
+    _write_header(root, version_iri=False)
+    assert "E119" in codes(check_ontology_header(root))
 
 
-def test_manifest_declaring_absent_file_is_error(tmp_path: Path):
+def test_header_declaring_absent_file_is_error(tmp_path: Path):
     """清单指向空气：声明的路径在磁盘上不存在。"""
     root = _write_ontology(tmp_path)
-    _write_manifest(root, parts=["tbox/ghost.ttl"])
-    findings = check_manifest(root)
+    _write_header(root, parts=["tbox/ghost.ttl"])
+    findings = check_ontology_header(root)
     assert "E119" in codes(findings)
     assert any("不存在" in f.message for f in findings)
 
 
-def test_manifest_omitting_existing_file_is_error(tmp_path: Path):
+def test_header_omitting_existing_file_is_error(tmp_path: Path):
     """新增文件忘了登记：层目录里有 .ttl 未写进 hasPart。"""
     root = _write_ontology(tmp_path)
-    _write_manifest(root, parts=["tbox/kinds.ttl"])
+    _write_header(root, parts=["tbox/schema.ttl", "tbox/kinds.ttl"])
     (tmp_path / "ontology" / "tbox" / "extra.ttl").write_text(
         "@prefix rcp: <https://risk-control.platform/ontology#> .\n", encoding="utf-8"
     )
-    findings = check_manifest(root)
+    findings = check_ontology_header(root)
     assert "E119" in codes(findings)
     assert any("清单遗漏" in f.message for f in findings)
 
 
-def test_manifest_multiple_identities_is_error(tmp_path: Path):
+def test_header_multiple_identities_is_error(tmp_path: Path):
     """一个本体只有一个身份，两个 owl:Ontology 即声明不可用。"""
     root = _write_ontology(tmp_path)
-    _write_manifest(root, extra="<https://risk-control.platform/other> a owl:Ontology .")
-    findings = check_manifest(root)
+    _write_header(root, extra="<https://risk-control.platform/other> a owl:Ontology .")
+    findings = check_ontology_header(root)
     assert "E119" in codes(findings)
     assert any("不可用" in f.message for f in findings)
 
 
-def test_manifest_duplicate_version_info_is_error(tmp_path: Path):
+def test_header_duplicate_version_info_is_error(tmp_path: Path):
     """versionInfo 是功能属性，多值即不可用（与 abox/tbox 同一护栏）。"""
     root = _write_ontology(tmp_path)
-    _write_manifest(
+    _write_header(
         root,
         extra='<https://risk-control.platform/ontology> owl:versionInfo "9.9.9" .',
     )
-    findings = check_manifest(root)
+    findings = check_ontology_header(root)
     assert "E119" in codes(findings)
     assert any("功能属性" in f.message for f in findings)
 
 
-def test_real_manifest_is_consistent():
-    """真实仓的清单必须与磁盘一致——这是文档不腐烂的底线。"""
+def test_header_split_across_files_is_error(tmp_path: Path):
+    """header 被写进第二个 tbox 文件 → 合并层后多值，装载期即报。
+
+    这是折进本体图之后比「独立清单文件」更强的地方：单文件校验只能看见自己，
+    合并层校验能看见任何一处重复声明。
+    """
+    root = _write_ontology(tmp_path)
+    _write_header(root)
+    (tmp_path / "ontology" / "tbox" / "other.ttl").write_text(
+        '@prefix owl: <http://www.w3.org/2002/07/owl#> .\n'
+        '<https://risk-control.platform/ontology> owl:versionInfo "9.9.9" .\n',
+        encoding="utf-8",
+    )
+    findings = check_ontology_header(root)
+    assert "E119" in codes(findings)
+    assert any("功能属性" in f.message for f in findings)
+
+
+def test_real_header_is_consistent():
+    """真实仓的本体头必须与磁盘一致——这是文档不腐烂的底线。"""
     import os
 
     ontology = Path(os.environ.get("RCP_ONTOLOGY") or Path(__file__).resolve().parent.parent)
     if not (ontology / "ontology").is_dir():
         pytest.skip("工作区无本体仓")
-    assert check_manifest(ontology) == []
+    assert check_ontology_header(ontology) == []

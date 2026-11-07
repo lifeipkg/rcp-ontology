@@ -37,8 +37,8 @@ ABOX_DIR = "abox"
 POLICY_DIR = "policy"
 SHAPES_DIR = "shapes"
 
-# 本体自述清单。位于 ontology/ 根而非任何一层，所以不参与层合并。
-MANIFEST_FILE = "manifest.ttl"
+# 本体头声明在 tbox/schema.ttl 里，属于本体图本身，不单独成文件。
+# 读取时合并整个 tbox 层，所以 header 若被写进两个文件会被多值护栏抓到。
 
 # Finding 的作用域：
 #   declaration —— 只读单仓声明即可判定，任何环境都能跑
@@ -178,44 +178,36 @@ def load_redlines(root: Path) -> dict[str, Any]:
     return data
 
 
-def manifest_path(root: Path) -> Path:
-    """清单文件位置（ontology/manifest.ttl）。"""
-    return ontology_root(root) / MANIFEST_FILE
+def load_header(root: Path) -> dict[str, Any]:
+    """读本体头（ontology header）：身份（IRI / 版本）与组成部分清单。
 
+    header 在本体图里，声明于 tbox/schema.ttl；这里合并整个 tbox 层再读，所以若有人
+    把 header 写进第二个 tbox 文件，功能属性的多值护栏会立刻报错——这正是它比"单独
+    一个文件"更强的地方：跨文件的重复声明也能抓到。
 
-def load_manifest(root: Path) -> dict[str, Any] | None:
-    """读本体自述清单：身份（IRI / 版本）与文件清单。
-
-    清单是可选文档，不参与装载，所以缺失时返回 None 而不是报错 —— 调用方据此输出
-    S005 明示跳过。但一旦存在就必须自洽：``owl:Ontology`` 只能有一个身份，
-    ``versionInfo`` / ``versionIRI`` / ``label`` 是功能属性，多值即报错（与 abox / tbox
-    的多值护栏同一口径，不因换文件就放松）。
+    ``owl:Ontology`` 只能有一个身份；``versionInfo`` / ``versionIRI`` / ``label``
+    是功能属性，多值即报错（与 abox / tbox 同一口径，不因换文件就放松）。
 
     返回值：``iri`` / ``version_info`` / ``version_iri`` / ``label`` 四个字符串（缺省
     None），以及 ``parts`` —— ``dcterms:hasPart`` 声明的仓内相对路径（已排序）。
+    没有 header 时返回全 None 的空结构，由调用方判 E119（不在这里 raise，因为"没写"
+    是缺陷而非加载失败，报错文案要能说清缺什么）。
     """
-    path = manifest_path(root)
-    if not path.is_file():
-        return None
-
-    graph = Graph()
-    try:
-        graph.parse(path, format="turtle")
-    except Exception as exc:  # noqa: BLE001 - 语法错误即声明不可用
-        raise LoadError(f"{path} TTL 解析失败: {exc}") from exc
+    graph, files = parse_layer(root, TBOX_DIR)
+    source = ", ".join(p.name for p in files)
 
     subjects = sorted(graph.subjects(RDF.type, OWL.Ontology))
     if not subjects:
-        raise LoadError(f"{path} 未声明 owl:Ontology，无法确定本体身份")
+        return {"iri": None, "label": None, "version_info": None, "version_iri": None, "parts": []}
     if len(subjects) > 1:
         names = ", ".join(str(s) for s in subjects)
-        raise LoadError(f"{path} 声明了 {len(subjects)} 个 owl:Ontology（{names}），本体只能有一个身份")
+        raise LoadError(f"{source} 声明了 {len(subjects)} 个 owl:Ontology（{names}），本体只能有一个身份")
     iri = subjects[0]
 
     def _single(predicate, field_name: str) -> str | None:
         values = list(graph.objects(iri, predicate))
         if len(values) > 1:
-            raise LoadError(f"{path} 的 {field_name} 有 {len(values)} 个值（功能属性只允许一个）")
+            raise LoadError(f"{source} 的 {field_name} 有 {len(values)} 个值（功能属性只允许一个）")
         return str(values[0]) if values else None
 
     return {
