@@ -470,7 +470,7 @@ def cmd_owners(args: argparse.Namespace) -> int:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    """L1 导出：声明 → RDF/Turtle。真源仍是 YAML 事实 + TTL 关系公理，RDF 是图形态。"""
+    """L1 导出：把 ontology/ 下的 TTL 声明图序列化为 Turtle（含 dependsOn 汇总边物化）。"""
     try:
         registry, concepts, relations, _root = _load_declarations(args)
     except LoadError as exc:
