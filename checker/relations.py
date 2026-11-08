@@ -36,10 +36,10 @@ def _local(node: Any) -> str:
 
 
 def kind_class(kind: str) -> str:
-    """把 kind 名转成 OWL 类名：patrol-line -> PatrolLine。
+    """把 kind 名转成 OWL 类名：data-gateway -> DataGateway。
 
-    关系端点约束在 TTL 里写的是 OWL 类（rcp:Service / rcp:PatrolLine），登记里写的是
-    kind 名（service / patrol-line），两侧比对必须先归一。
+    关系端点约束在 TTL 里写的是 OWL 类（rcp:Service / rcp:Iam），登记里写的是
+    kind 名（service / iam），两侧比对必须先归一。
     """
     return "".join(part.capitalize() for part in str(kind).split("-"))
 

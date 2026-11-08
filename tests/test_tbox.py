@@ -67,10 +67,11 @@ def _gateway(**overrides) -> str:
 
 def test_real_tbox_loads_three_layers():
     concepts = load_concepts(ROOT)
-    assert len(concepts["kinds"]) == 7
-    # 16 = 原有 14 项 + 唯一 IAM 的两项能力（iam.auth / iam.users）
-    assert len(concepts["capabilities"]) == 16
-    assert len(concepts["decisions"]) == 6
+    # 6 kinds：gateway / data-gateway / db-ops / iam / frontend / meta
+    assert len(concepts["kinds"]) == 6
+    # 7 项能力：iam.auth / iam.users / data.query / data.execute /
+    #           schema.migrate / schema.version / ops.console
+    assert len(concepts["capabilities"]) == 7
 
 
 def test_dict_view_matches_tbox_graph():
@@ -95,14 +96,6 @@ def test_dict_view_matches_tbox_graph():
             assert values == [kind[key]], f"{kind['name']}.{key} 与图不一致"
         allowed = sorted(kebab(str(v).rsplit("#", 1)[-1]) for v in graph.objects(node, RCP.allowsDependsOn))
         assert allowed == kind["allowed_depends_on_kinds"]
-
-
-def test_decisions_sorted_by_score():
-    """RL-003 是逐字比对，顺序必须确定：按分值升序，与契约层 enum 顺序一致。"""
-    concepts = load_concepts(ROOT)
-    scores = [d["base_score"] for d in concepts["decisions"]]
-    assert scores == sorted(scores)
-    assert [d["code"] for d in concepts["decisions"]][0] == "PASS"
 
 
 def test_capabilities_point_at_registered_entities():
@@ -170,28 +163,21 @@ def test_missing_behaviour_property_triggers_e113(tmp_path):
 
 def test_capability_implementer_multi_value_rejected(tmp_path):
     body = (
-        "rcp:patrol.dispatch a rcp:Capability ;\n"
+        "rcp:api.relay a rcp:Capability ;\n"
         '    rdfs:label "巡查派发" ;\n'
-        "    rcp:implementedBy rcp:api-gateway, rcp:content-patrol .\n"
+        "    rcp:implementedBy rcp:api-gateway, rcp:service-a .\n"
     )
     path = _write(tmp_path, body)
     with pytest.raises(TboxError, match="只允许一个值"):
         _parse(path)
 
 
-def test_decision_without_score_is_none(tmp_path):
-    body = 'rcp:PASS a rcp:Decision ; rdfs:label "放行" .\n'
-    path = _write(tmp_path, body)
-    concepts, _ = _parse(path)
-    assert concepts["decisions"][0]["base_score"] is None
-
-
 def test_capability_naming_is_enforced_in_python():
     """E114 已随 TBox 迁移移回 Python 轨：名为 IRI local name，图上无字面值可挂 pattern。"""
-    findings = check_capability_naming({"capabilities": [{"name": "Patrol_Dispatch"}]})
+    findings = check_capability_naming({"capabilities": [{"name": "Worker_Dispatch"}]})
     assert [f.code for f in findings] == ["E114"]
 
 
 def test_capability_naming_accepts_dotted_names():
-    findings = check_capability_naming({"capabilities": [{"name": "patrol.content.dedup"}]})
+    findings = check_capability_naming({"capabilities": [{"name": "worker.dedup"}]})
     assert findings == []

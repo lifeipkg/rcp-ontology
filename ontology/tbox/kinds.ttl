@@ -17,7 +17,7 @@
 #
 # 约定：
 #   1. 五个属性必须显式写全，缺一个即 E113 —— 缺省补默认会让检查行为静默退化。
-#   2. kind 名由类名转 kebab（PatrolLine → patrol-line），与登记里的 kind 字面值同一套
+#   2. kind 名由类名转 kebab（DataGateway → data-gateway），与登记里的 kind 字面值同一套
 #      归一规则，装载器据此还原，不另写 rcp:name。
 #   3. 新增种类只改本文件：类型、白名单、端口与契约要求随之生效，无需改 Python。
 # ─────────────────────────────────────────────────────────────────────────────
@@ -25,21 +25,12 @@
 rcp:Gateway a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;
     rdfs:label "网关" ;
-    rcp:definition "平台对外唯一 HTTP 入口，负责幂等、路由、分级处置与降级。" ;
+    rcp:definition "平台对外唯一 HTTP 入口，负责路由、鉴权透传与上游转发。" ;
     rcp:mustBeExternal true ;
     rcp:isEntry true ;
     rcp:requiresPort true ;
     rcp:requiresContract true ;
-    rcp:allowsDependsOn rcp:PatrolLine, rcp:DataGateway, rcp:DbOps, rcp:Iam .
-
-rcp:PatrolLine a owl:Class, rcp:Kind ;
-    rdfs:subClassOf rcp:Service ;
-    rdfs:label "巡查线" ;
-    rcp:definition "按业务域切分的风控判定单元，必须可独立部署、独立降级。" ;
-    rcp:mustBeExternal false ;
-    rcp:isEntry false ;
-    rcp:requiresPort true ;
-    rcp:requiresContract true .
+    rcp:allowsDependsOn rcp:DataGateway, rcp:DbOps, rcp:Iam .
 
 rcp:DataGateway a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;
@@ -59,8 +50,8 @@ rcp:DbOps a owl:Class, rcp:Kind ;
     rcp:requiresPort true ;
     rcp:requiresContract true .
 
-# IAM 不依赖任何服务（不写 allowsDependsOn）：它是鉴权链路的源头，被网关调用。
-# 让它反向依赖业务服务，会把"鉴权服务挂掉"扩大成"巡查链也挂掉"。
+# IAM 不依赖任何业务服务：它是鉴权链路的源头，被网关调用。
+# 让它反向依赖业务服务，会把"鉴权服务挂掉"扩大成"业务链也挂掉"。
 rcp:Iam a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;
     rdfs:label "身份与访问管理" ;
@@ -75,7 +66,7 @@ rcp:Iam a owl:Class, rcp:Kind ;
 rcp:Frontend a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;
     rdfs:label "前端" ;
-    rcp:definition "运营控制台，只经 api-gateway 访问后端，不得直连任何裸服务。" ;
+    rcp:definition "运营前端，只经 api-gateway 访问后端，不得直连任何裸服务。" ;
     rcp:mustBeExternal true ;
     rcp:isEntry true ;
     rcp:requiresPort true ;

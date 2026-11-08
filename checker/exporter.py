@@ -14,11 +14,11 @@
 本模块的谓词映射与 ``abox.py`` 的还原映射**互为逆映射**，两边同时改才不会丢字段。
 
 三元组形态：
-    rcp:content-patrol  rdf:type          rcp:PatrolLine ;
-                        rcp:calls         rcp:dataway ;
-                        rcp:dependsOn     rcp:dataway ;   # 可达性汇总边
-                        rcp:hasCapability rcp:patrol.content.dedup ;
-                        rcp:port          8081 .
+    rcp:dataway         rdf:type          rcp:DataGateway ;
+                        rcp:calls         rcp:api-gateway ;
+                        rcp:dependsOn     rcp:api-gateway ;   # 可达性汇总边
+                        rcp:hasCapability rcp:data.query ;
+                        rcp:port          8090 .
 
 为什么同时产出 typed 边与 dependsOn 汇总边：
     可达性图上的每条关系都声明了 rdfs:subPropertyOf rcp:dependsOn。这里的汇总边
@@ -28,7 +28,7 @@
     它们的边不得进入可达性计算，这正是分域的目的。
 
 kind 通过 rdf:type 表达（OWL 的类归属），不另设 kind 数据属性——这正是
-SHACL 里 sh:targetClass 能直接命中巡查线实例的前提。
+SHACL 里 sh:targetClass 能直接命中服务实例的前提。
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ def _library_node(g: Graph, name: str, library: dict[str, Any]) -> None:
 def _kind_node(g: Graph, kind: dict[str, Any]) -> None:
     """把 TBox 的一个 kind 声明导出为 rcp:Kind 实例。
 
-    kind 类名与 service 的 rdf:type 共用 kind_class 命名（patrol-line -> PatrolLine），
+    kind 类名与 service 的 rdf:type 共用 kind_class 命名（worker -> Worker），
     因此 E201（service 的 kind 类必须是已声明的 rcp:Kind）与 E113（引用悬空）都能
     在图上闭环：未声明的 kind 类不会挂 rcp:Kind 类型。
     """
@@ -218,16 +218,5 @@ def build_rdf(
         g.add((node, RCP.name, Literal(str(name))))
         if cap.get("owner"):
             g.add((node, RCP.owner, Literal(str(cap["owner"]))))
-
-    for decision in concepts.get("decisions", []):
-        code = decision.get("code")
-        if not code:
-            continue
-        node = RCP[str(code)]
-        g.add((node, RDF.type, RCP.Decision))
-        g.add((node, RCP.name, Literal(str(code))))
-        score = decision.get("base_score")
-        if isinstance(score, int):
-            g.add((node, RCP.baseScore, Literal(score)))
 
     return g

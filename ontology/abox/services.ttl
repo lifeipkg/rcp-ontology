@@ -9,7 +9,7 @@
 #
 # 四条书写约定（违反会被 check 判红或装载失败）：
 #   1. 实例 IRI 的 local name 就是服务名，不另写 rcp:name —— 同一事实只有一个位置。
-#   2. 种类用 rdf:type 表达（rcp:Gateway / rcp:PatrolLine …），不写 kind 字面量。
+#   2. 种类用 rdf:type 表达（rcp:Gateway / rcp:DataGateway …），不写 kind 字面量。
 #      OWL 的类归属就是种类，SHACL 的 sh:targetClass 也直接命中。
 #   3. 边只写具体关系（rcp:calls / rcp:queries …），不写汇总谓词 dependsOn。
 #      汇总边是可推导的结论（calls rdfs:subPropertyOf dependsOn），写进真源
@@ -23,16 +23,6 @@
 # ── 服务 ────────────────────────────────────────────────────────────────
 # external true 表示允许被工作区外部直接访问；其余只允许集群内互调。
 
-rcp:account-patrol
-    a rcp:PatrolLine, rcp:Service ;
-    rcp:repo "rcp-account-patrol" ;
-    rcp:port 8083 ;
-    rcp:external false ;
-    rcp:owner "risk-account" ;
-    rcp:health "/actuator/health" ;
-    rcp:hasCapability rcp:patrol.account.rule ;
-    rcp:contract "contracts/openapi/account-patrol.yaml" .
-
 rcp:api-gateway
     a rcp:Gateway, rcp:Service ;
     rcp:repo "rcp-api-gateway" ;
@@ -40,20 +30,8 @@ rcp:api-gateway
     rcp:external true ;
     rcp:owner "platform" ;
     rcp:health "/actuator/health" ;
-    rcp:hasCapability rcp:patrol.dispatch, rcp:patrol.domains ;
-    rcp:calls rcp:account-patrol, rcp:content-patrol,
-              rcp:fund-patrol, rcp:iam, rcp:message-patrol ;
+    rcp:calls rcp:iam ;
     rcp:contract "contracts/openapi/api-gateway.yaml" .
-
-rcp:content-patrol
-    a rcp:PatrolLine, rcp:Service ;
-    rcp:repo "rcp-content-patrol" ;
-    rcp:port 8081 ;
-    rcp:external false ;
-    rcp:owner "risk-content" ;
-    rcp:health "/actuator/health" ;
-    rcp:hasCapability rcp:patrol.content.dedup ;
-    rcp:contract "contracts/openapi/content-patrol.yaml" .
 
 # 元仓：不参与运行时数据面，无端口、不部署、不挂 OpenAPI。
 # 登记它们的目的是让 owner 与仓边界有唯一出处，否则 E107 无法区分
@@ -94,16 +72,6 @@ rcp:db-ops
         rcp:reviewBy "2027-03-31"^^xsd:date
     ] .
 
-rcp:fund-patrol
-    a rcp:PatrolLine, rcp:Service ;
-    rcp:repo "rcp-fund-patrol" ;
-    rcp:port 8084 ;
-    rcp:external false ;
-    rcp:owner "risk-fund" ;
-    rcp:health "/actuator/health" ;
-    rcp:hasCapability rcp:patrol.fund.rule ;
-    rcp:contract "contracts/openapi/fund-patrol.yaml" .
-
 # 平台唯一 IAM（Go + Gin）。会话落 PostgreSQL，但只经 dataway 的 HTTP 契约，
 # 不持数据库驱动（RL-005）；DDL 只在 rcp-ops/migrations（RL-004）。
 rcp:iam
@@ -118,16 +86,6 @@ rcp:iam
     rcp:queries rcp:dataway ;
     rcp:writes rcp:dataway ;
     rcp:contract "contracts/openapi/iam.yaml" .
-
-rcp:message-patrol
-    a rcp:PatrolLine, rcp:Service ;
-    rcp:repo "rcp-message-patrol" ;
-    rcp:port 8082 ;
-    rcp:external false ;
-    rcp:owner "risk-message" ;
-    rcp:health "/actuator/health" ;
-    rcp:hasCapability rcp:patrol.message.ac ;
-    rcp:contract "contracts/openapi/message-patrol.yaml" .
 
 rcp:ontology
     a rcp:Meta ;
@@ -150,13 +108,3 @@ rcp:web
     rcp:health "/" ;
     rcp:hasCapability rcp:ops.console ;
     rcp:calls rcp:api-gateway .
-
-# ── 库 ──────────────────────────────────────────────────────────────────
-# 非 HTTP 服务：只被依赖，不登记端口，不参与运行时探活与降级。
-
-rcp:rcp-core
-    a rcp:Library ;
-    rcp:repo "rcp-core" ;
-    rcp:artifact "com.risk.platform:rcp-core:1.0.0" ;
-    rcp:owner "platform" ;
-    rcp:hasCapability rcp:decision.model, rcp:patrol.pipeline, rcp:rule.engine .

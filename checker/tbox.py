@@ -5,15 +5,14 @@
 
 还原规则（与 tbox/ 各文件顶部的书写约定一一对应）：
 
-- 条目标识取 IRI local name：kind 再转 kebab（PatrolLine → patrol-line，与登记里的
-  kind 字面值同一套归一规则），能力与决策直接用 local name，术语保留下划线；
+- 条目标识取 IRI local name：kind 再转 kebab（DataGateway → data-gateway，与登记里的
+  kind 字面值同一套归一规则），能力直接用 local name，术语保留下划线；
 - 种类行为属性取 ``rcp:mustBeExternal`` / ``rcp:isEntry`` / ``rcp:requiresPort`` /
   ``rcp:requiresContract``，**缺省留 None 而不是补默认值** —— 补默认会让 E113
   （"种类缺布尔属性"）永远不触发，检查器的行为在无声中退化；
-- 能力归属取 ``rcp:implementedBy`` 的目标 local name（服务或库的实例 IRI）；
-- 决策按 ``rcp:baseScore`` 升序返回，使 RL-003 的逐字比对有确定顺序。
+- 能力归属取 ``rcp:implementedBy`` 的目标 local name（服务或库的实例 IRI）。
 
-功能属性（四个布尔、baseScore、implementedBy）多值即解析失败：RDF 允许多值，
+功能属性（四个布尔、implementedBy）多值即解析失败：RDF 允许多值，
 这条必须显式判，它是原 YAML 严格重复键检查在 TTL 上的等价物。
 """
 
@@ -75,16 +74,6 @@ def _text(g: Graph, node: URIRef, pred: URIRef, where: str) -> str:
     return str(raw) if raw is not None else ""
 
 
-def _int(g: Graph, node: URIRef, pred: URIRef, where: str) -> int | None:
-    raw = _single(g, node, pred, where)
-    if raw is None:
-        return None
-    try:
-        return int(raw.toPython() if isinstance(raw, Literal) else raw)
-    except (TypeError, ValueError):
-        raise TboxError(f"{where} 的 {_local(pred)} 不是整数: {raw!r}") from None
-
-
 def _kind_entries(g: Graph) -> list[dict[str, Any]]:
     kinds: list[dict[str, Any]] = []
     for node in sorted(g.subjects(RDF.type, RCP.Kind), key=str):
@@ -124,24 +113,6 @@ def _capability_entries(g: Graph) -> list[dict[str, Any]]:
     return caps
 
 
-def _decision_entries(g: Graph) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for node in g.subjects(RDF.type, RCP.Decision):
-        where = f"decision {_local(node)}"
-        entries.append(
-            {
-                "code": _local(node),
-                "zh": _text(g, node, RDFS.label, where),
-                "base_score": _int(g, node, RCP.baseScore, where),
-                "meaning": _text(g, node, RCP.meaning, where),
-            }
-        )
-    # 按分值升序：枚举顺序即分值顺序，RL-003 的逐字比对依赖这一确定顺序。
-    # 缺分值的条目排到末尾，交给 RL-003 报"分值不一致"，而不是在这里静默排序。
-    entries.sort(key=lambda d: (d["base_score"] is None, d["base_score"] or 0, d["code"]))
-    return entries
-
-
 def _term_entries(g: Graph) -> list[dict[str, Any]]:
     terms: list[dict[str, Any]] = []
     for node in sorted(g.subjects(RDF.type, RCP.Term), key=str):
@@ -163,13 +134,12 @@ def parse_tbox(graph: Graph, source: str) -> dict[str, list[dict[str, Any]]]:
     data: dict[str, list[dict[str, Any]]] = {
         "kinds": _kind_entries(graph),
         "capabilities": _capability_entries(graph),
-        "decisions": _decision_entries(graph),
         "terms": _term_entries(graph),
     }
     # 只判"一个概念都没认出来"：这通常意味着路径指错或层里混进了别的东西。
-    # 至于 kind/decision 够不够用，由 E201/RL-003 这类具体检查判，装载器不下这个结论。
+    # 至于 kind/capability 够不够用，由 E201/E202 这类具体检查判，装载器不下这个结论。
     if not any(data.values()):
         raise TboxError(
-            f"{source} 里没有可识别的概念声明（kind / capability / decision / term 全空）"
+            f"{source} 里没有可识别的概念声明（kind / capability / term 全空）"
         )
     return data

@@ -367,8 +367,8 @@ def run_declared_scans(
     """按 policy/redlines.ttl 的 spec 声明执行三类扫描红线。
 
     每类 spec.type 对应一个解释器；新增一条已支持类型的红线只需在 redlines.ttl
-    加一条声明，无需改本文件。registry-assert 与 cross-source 的判定由 checks.py
-    的 TBox 驱动检查与跨源比对承担（不在这里）。
+    加一条声明，无需改本文件。registry-assert 的判定由 checks.py
+    的 TBox 驱动检查承担（不在这里）。
     """
     findings: list[Finding] = []
     exceptions = redlines.get("exceptions", [])

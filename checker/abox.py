@@ -74,7 +74,7 @@ def _local(node: Any) -> str:
 
 
 def kebab(class_name: str) -> str:
-    """OWL 类名转 kind 名：PatrolLine -> patrol-line，DbOps -> db-ops。"""
+    """OWL 类名转 kind 名：DataGateway -> data-gateway，DbOps -> db-ops。"""
     return re.sub(r"(?<!^)(?=[A-Z])", "-", class_name).lower()
 
 
@@ -262,7 +262,7 @@ def parse_abox(graph: Graph, source: str) -> dict[str, Any]:
             libraries.append(_library_entry(graph, node))
             continue
         if not kinds:
-            raise AboxError(f"{where} 未声明种类：需形如 `a rcp:PatrolLine` 的 rdf:type")
+            raise AboxError(f"{where} 未声明种类：需形如 `a rcp:Service` 的 rdf:type")
         if len(kinds) > 1:
             raise AboxError(
                 f"{where} 声明了多个种类（{', '.join(kinds)}）；一个实体只能属于一个 kind"

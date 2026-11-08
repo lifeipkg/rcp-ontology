@@ -41,7 +41,7 @@ def test_real_policy_loads_all_redlines():
     redlines = load_redlines(ROOT)
     ids = [c["id"] for c in redlines["constraints"]]
     assert ids == sorted(ids)
-    assert {"RL-001", "RL-004", "RL-007"} <= set(ids)
+    assert {"RL-002", "RL-004", "RL-007"} <= set(ids)
     assert redlines["exceptions"] == []
 
 
@@ -49,7 +49,6 @@ def test_spec_type_comes_from_rdf_type():
     redlines = load_redlines(ROOT)
     by_id = {c["id"]: c for c in redlines["constraints"]}
     assert by_id["RL-004"]["spec"]["type"] == "file-scan"
-    assert by_id["RL-003"]["spec"]["type"] == "cross-source"
     assert by_id["RL-007"]["spec"]["type"] == "upstream-scan"
 
 
@@ -58,7 +57,6 @@ def test_list_parameters_stay_lists():
     by_id = {c["id"]: c for c in load_redlines(ROOT)["constraints"]}
     assert by_id["RL-004"]["spec"]["include"] == ["*.sql"]
     assert by_id["RL-005"]["spec"]["deny_values"][0] == "mysql"
-    assert isinstance(by_id["RL-003"]["spec"]["source"], list)
 
 
 def test_regex_escapes_survive_turtle():

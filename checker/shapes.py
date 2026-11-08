@@ -8,7 +8,7 @@ TBox 改了，shapes 随之变，无需改本文件。
 
 生成的四类 shapes（每个 kind 一个 NodeShape，targetClass 到该 kind 的 OWL 类）：
 
-1. E106/RL-001 依赖白名单  —— allowed_depends_on_kinds；空列表=零依赖
+1. E106 依赖白名单      —— allowed_depends_on_kinds；空列表=零依赖
 2. RL-002 external 方向    —— must_be_external
 3. E001  port 必填         —— requires_port
 4. RL-006 contract 必填    —— requires_contract
@@ -60,32 +60,17 @@ def _add_class_or(g: Graph, prop: object, classes: list[object]) -> None:
 
 
 def _add_depends_on_shapes(g: Graph, concepts: dict[str, Any]) -> None:
-    """E106（依赖种类越界）+ RL-001（巡查线互调，patrol-line 专属）。
+    """E106（依赖种类越界）。
 
     统一用「sh:qualifiedValueShape + sh:qualifiedMinCount 1」表达「存在违规依赖」，
-    用 sh:not 排除白名单内/由其它编号负责的依赖。违规值定义为「已登记服务（rcp:Service）
+    用 sh:not 排除白名单内的依赖。违规值定义为「已登记服务（rcp:Service）
     且不在本 kind 白名单内」——未登记依赖不满足「rcp:Service」，交给 E105 报告，避免
     一条依赖同时命中 E105 与 E106（与 checks.py 的 E105 continue 短路语义一致）。
     """
-    kinds = {k["name"] for k in concepts["kinds"]}
     for kind in concepts["kinds"]:
         name = kind["name"]
         cls = kind_class(name)
         allowed = [kind_class(a) for a in kind.get("allowed_depends_on_kinds") or []]
-
-        # RL-001：巡查线不得依赖巡查线（专门的架构红线编号）。
-        if name == "patrol-line":
-            shape = RCP[f"Shape_RL001_{cls}"]
-            g.add((shape, RDF.type, SH.NodeShape))
-            g.add((shape, SH.targetClass, RCP[cls]))
-            prop = BNode()
-            g.add((shape, SH.property, prop))
-            g.add((prop, SH.path, RCP.dependsOn))
-            vs = BNode()
-            g.add((vs, SH["class"], RCP["PatrolLine"]))
-            g.add((prop, SH.qualifiedValueShape, vs))
-            g.add((prop, SH.qualifiedMaxCount, Literal(0)))
-            g.add((prop, SH.message, Literal("RL-001: 巡查线不得互相调用")))
 
         # E106：依赖种类必须在白名单内。
         shape = RCP[f"Shape_E106_{cls}"]
@@ -101,12 +86,7 @@ def _add_depends_on_shapes(g: Graph, concepts: dict[str, Any]) -> None:
             not_shape = BNode()
             _add_class_or(g, not_shape, [RCP[a] for a in allowed])
             g.add((vs, SH["not"], not_shape))
-        elif name == "patrol-line":
-            # 互调已由 RL-001 负责，E106 只查「依赖非 patrol-line 的已登记服务」。
-            not_shape = BNode()
-            g.add((not_shape, SH["class"], RCP["PatrolLine"]))
-            g.add((vs, SH["not"], not_shape))
-        # else：allowed 空的非 patrol-line，违规值即「任何已登记依赖」。
+        # else：allowed 空，违规值即「任何已登记依赖」。
         g.add((prop, SH.qualifiedValueShape, vs))
         g.add((prop, SH.qualifiedMaxCount, Literal(0)))
         g.add((prop, SH.message, Literal(f"E106: {name}({cls}) 依赖种类越界")))

@@ -55,9 +55,9 @@ rcp:api-gateway
     rcp:external true ;
     rcp:owner "platform" ;
     rcp:health "/actuator/health" ;
-    rcp:hasCapability rcp:patrol.dispatch ;
+    rcp:hasCapability rcp:api.relay ;
     rcp:contract "contracts/openapi/api-gateway.yaml" ;
-    rcp:calls rcp:content-patrol .
+    rcp:calls rcp:service-a .
 """,
     )
     registry = load_registry(root)
@@ -67,22 +67,22 @@ rcp:api-gateway
     assert service["port"] == 8080
     assert service["external"] is True
     assert service["health"] == "/actuator/health"
-    assert service["capabilities"] == ["patrol.dispatch"]
+    assert service["capabilities"] == ["api.relay"]
     assert service["contracts"] == ["contracts/openapi/api-gateway.yaml"]
     # 具体关系边，不产出 depends_on 汇总边
-    assert service["relations"] == {"calls": ["content-patrol"]}
+    assert service["relations"] == {"calls": ["service-a"]}
 
 
 def test_kind_kebab_conversion(tmp_path: Path) -> None:
     root = write_ttl(
         tmp_path,
         """
-rcp:a a rcp:PatrolLine, rcp:Service ; rcp:repo "r" ; rcp:external false ; rcp:owner "o" .
+rcp:a a rcp:Worker, rcp:Service ; rcp:repo "r" ; rcp:external false ; rcp:owner "o" .
 rcp:b a rcp:DbOps, rcp:Service ; rcp:repo "r2" ; rcp:external false ; rcp:owner "o" .
 """,
     )
     kinds = {s["name"]: s["kind"] for s in load_registry(root)["services"]}
-    assert kinds == {"a": "patrol-line", "b": "db-ops"}
+    assert kinds == {"a": "worker", "b": "db-ops"}
 
 
 def test_expected_block(tmp_path: Path) -> None:
@@ -117,17 +117,17 @@ def test_library_is_not_a_service(tmp_path: Path) -> None:
     root = write_ttl(
         tmp_path,
         """
-rcp:rcp-core
+rcp:shared-lib
     a rcp:Library ;
-    rcp:repo "rcp-core" ;
-    rcp:artifact "com.risk.platform:rcp-core:1.0.0" ;
+    rcp:repo "shared-lib" ;
+    rcp:artifact "com.example:shared-lib:1.0.0" ;
     rcp:owner "platform" ;
     rcp:hasCapability rcp:rule.engine .
 """,
     )
     registry = load_registry(root)
     assert registry["services"] == []
-    assert registry["libraries"][0]["artifact"] == "com.risk.platform:rcp-core:1.0.0"
+    assert registry["libraries"][0]["artifact"] == "com.example:shared-lib:1.0.0"
 
 
 def test_duplicate_functional_property_fails(tmp_path: Path) -> None:
@@ -135,7 +135,7 @@ def test_duplicate_functional_property_fails(tmp_path: Path) -> None:
     root = write_ttl(
         tmp_path,
         """
-rcp:a a rcp:PatrolLine, rcp:Service ;
+rcp:a a rcp:Worker, rcp:Service ;
     rcp:repo "r" ; rcp:owner "o" ; rcp:external false ;
     rcp:port 8080, 9090 .
 """,
@@ -155,7 +155,7 @@ def test_missing_kind_fails(tmp_path: Path) -> None:
 def test_relation_target_must_be_iri(tmp_path: Path) -> None:
     root = write_ttl(
         tmp_path,
-        'rcp:a a rcp:PatrolLine, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false ; rcp:calls "b" .\n',
+        'rcp:a a rcp:Worker, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false ; rcp:calls "b" .\n',
     )
     with pytest.raises(LoadError) as exc:
         load_registry(root)
@@ -170,7 +170,7 @@ def test_yaml_leftovers_in_layer_are_ignored(tmp_path: Path) -> None:
     """
     root = write_ttl(
         tmp_path,
-        'rcp:from-ttl a rcp:PatrolLine, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false .\n',
+        'rcp:from-ttl a rcp:Worker, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false .\n',
     )
     (root / "ontology" / "abox" / "services.yaml").write_text(
         textwrap.dedent(
@@ -178,7 +178,7 @@ def test_yaml_leftovers_in_layer_are_ignored(tmp_path: Path) -> None:
             services:
               - name: from-yaml
                 repo: r
-                kind: patrol-line
+                kind: worker
                 external: false
                 owner: o
                 capabilities: []
@@ -193,7 +193,7 @@ def test_platform_config_is_merged(tmp_path: Path) -> None:
     """平台配置与实例登记同层不同文件，装载后是同一份视图。"""
     root = write_ttl(
         tmp_path,
-        'rcp:a a rcp:PatrolLine, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false .\n',
+        'rcp:a a rcp:Worker, rcp:Service ; rcp:repo "r" ; rcp:owner "o" ; rcp:external false .\n',
         platform=True,
     )
     registry = load_registry(root)
