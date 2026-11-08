@@ -10,21 +10,24 @@
 # 或读本文件：
 #   grep -A6 'rcp:stack' rcp-ontology/ontology/abox/platform.ttl
 #
-# 基座版本：服务侧必须对齐，禁止各仓自行抬版本。Spring Cloud 与 Spring Cloud
+# 基座版本：服务侧必须对齐，禁止各仓自行抬版本。Java 侧：Spring Cloud 与 Spring Cloud
 # Alibaba 的兼容组合经容器内 Maven 构建验证：Boot 3.3.x → Spring Cloud 2023.0.x
 # (Leyton) → SCA 2023.0.3.x（nacos-client 2.4.x，配 Nacos Server v2.3.2）。
+# Go 侧：go 1.22 + gin 1.10.0，由各仓 go.mod 钉住，同样不得自行抬版本。
 #
 # 服务发现：消费方按服务名解析地址，不在部署清单里写死上游 URL（见 RL-007）。
 #   discoveryState 取值：
 #     declared —— 形态已声明、基础设施清单已就位，Java 侧尚未引入 discovery 依赖
 #     wired    —— 服务已引入依赖并按 name 解析，清单中不再出现上游地址
+#   注：本平台的 wired 指 Java 侧（nacos 注册 + 按名解析）已接线；Go 侧不接 Nacos，
+#   按 k8s DNS 解析（fallback），同样满足"清单不写上游地址"，但不在注册中心有实例视图。
 # ─────────────────────────────────────────────────────────────────────────────
 
 rcp:platform
     a rcp:Platform ;
     rcp:registrySchema "rcp.registry/v2" ;
     rcp:platformName "risk-control-platform" ;
-    rcp:updated "2026-11-07"^^xsd:date ;
+    rcp:updated "2026-11-08"^^xsd:date ;
     rcp:stack [
         rcp:java "17" ;
         rcp:springBoot "3.3.5" ;
@@ -41,6 +44,6 @@ rcp:platform
         rcp:namespace "risk-control" ;
         rcp:discoveryGroup "DEFAULT_GROUP" ;
         rcp:fallback "k8s-dns" ;
-        rcp:note "接线已完成：8 个 Java 服务（含 iam）引入 nacos-discovery 依赖并按占位符注册，网关经 DiscoveryClient 按服务名解析（多实例轮转），endpoints 仅作兜底；清单中不再出现上游地址（RL-007 例外已随收尾删除）。网关对 IAM 的调用是逐请求内省（iam.auth 的唯一判定点），IAM 不可用时鉴权 fail closed。本平台为 demo 定位，未做运行时标定，行为验证以 mvn test 与寻址单测为准，见 rcp-contracts/docs/DISCOVERY.md。" ;
-        rdfs:comment "服务发现的形态与进度。state=wired 表示运行时代码已按服务名解析。" ;
+        rcp:note "接线分两种形态：5 个 Java 服务（api-gateway 与四条巡查线）引入 nacos-discovery 依赖并按占位符注册，网关经 DiscoveryClient 按服务名解析（多实例轮转），endpoints 仅作兜底；3 个 Go 服务（iam/dataway/db-ops）不注册 Nacos，按部署侧 Service 名经 DNS 解析（fallback 即 k8s-dns）。两种形态都满足 RL-007：清单中不出现上游地址。网关对 IAM 的调用是逐请求内省（iam.auth 的唯一判定点），IAM 不可用时鉴权 fail closed。本平台为 demo 定位，未做运行时标定，行为验证以各仓单测（mvn test / go test）与寻址单测为准，见 rcp-contracts/docs/DISCOVERY.md。" ;
+        rdfs:comment "服务发现的形态与进度。state=wired 表示 Java 侧运行时代码已按服务名解析；Go 侧走 k8s-dns，不注册 Nacos。" ;
     ] .
