@@ -3,7 +3,7 @@
 覆盖三条此前只有声明、没有实现的约束（现已参数化，规则即数据）：
 
 - RL-004 建表/改表只允许在 ``rcp-ops/migrations``（file-scan）
-- RL-005 业务服务不得直接引入 JDBC 驱动，读写只经 dataway（registry-scan）
+- RL-005 业务服务不得直接引入数据库驱动（pom.xml / go.mod），读写只经 dataway（registry-scan）
 - RL-007 部署清单不得写死内部服务的上游地址（upstream-scan）
 
 本模块是"规则解释器"：执行参数（include / match / denyValues / allowPrefixes /
@@ -44,6 +44,14 @@ PRUNED_DIRS = {
 DEPENDENCY_BLOCK = re.compile(r"<dependency>(.*?)</dependency>", re.S)
 GROUP_ID = re.compile(r"<groupId>\s*([^<\s]+)\s*</groupId>")
 ARTIFACT_ID = re.compile(r"<artifactId>\s*([^<\s]+)\s*</artifactId>")
+
+# go.mod 依赖抽取：require 单行与 require ( ... ) 块都覆盖。
+# 模块路径须含域名点号与斜杠（github.com/jackc/pgx/v5），避免把 go 版本行、
+# replace 指令或注释误当依赖。版本读到行尾，注释符号 // 之后丢弃。
+GO_REQUIRE_LINE = re.compile(
+    r"^\s*(?:require\s+)?([a-z0-9.\-]+\.[a-z]{2,}/[^\s]+)\s+(v[^\s]+)",
+    re.M,
+)
 
 
 def is_worktree(path: Path) -> bool:
@@ -141,21 +149,42 @@ def _dependencies(pom_text: str) -> Iterator[tuple[str, str]]:
         yield (group.group(1) if group else "", artifact.group(1) if artifact else "")
 
 
+def _go_requires(gomod_text: str) -> Iterator[tuple[str, str]]:
+    """抽取 go.mod 的 require 项，返回 (模块路径, 版本)。
+
+    只按文本结构判定，不调 go 工具链；require 单行与 require ( ... ) 块都覆盖。
+    """
+    for line in gomod_text.splitlines():
+        line = line.split("//", 1)[0]
+        hit = GO_REQUIRE_LINE.match(line)
+        if hit:
+            yield hit.group(1), hit.group(2)
+
+
+def _registry_entries(filename: str, text: str) -> Iterator[tuple[str, str]]:
+    """按清单文件名分派解析器；未知文件名不猜测，直接不产出条目。"""
+    if filename == "pom.xml":
+        yield from _dependencies(text)
+    elif filename == "go.mod":
+        yield from _go_requires(text)
+
+
 def run_registry_scan(
     spec: dict[str, Any],
     workspace: Path,
     registry: dict[str, Any],
     redline_id: str,
 ) -> list[Finding]:
-    """registry-scan：遍历登记的服务/库，读其 pom.xml，抽取依赖 groupId，命中 deny 即报。
+    """registry-scan：遍历登记的服务/库，读其依赖清单，命中 deny 即报。
 
-    执行参数：include（仓内文件名）/ extract / deny_values / allow_kinds / message。
-    message 支持 {repo} {name} {group} {artifact} 占位。
+    执行参数：include（仓内文件名列表）/ extract / deny_values / allow_kinds / message。
+    include 支持多个文件名；pom.xml 走 Maven 依赖解析，go.mod 走 Go require 解析。
+    message 支持 {repo} {name} {file} {group} {artifact} 占位。
     """
     findings: list[Finding] = []
     allowed_kinds = set(spec.get("allow_kinds") or [])
     deny = set(spec.get("deny_values") or [])
-    filename = (spec.get("include") or ["pom.xml"])[0]
+    filenames = list(spec.get("include") or ["pom.xml"])
     template = (
         spec.get("message")
         or "{repo}（{name}）命中禁用依赖 {group}:{artifact}"
@@ -179,20 +208,24 @@ def run_registry_scan(
     for repo, name in targets:
         if not repo or repo in allowed_repos:
             continue
-        pom = workspace / repo / filename
-        if not pom.is_file():
-            # 仓缺失由构建暴露，不在本检查里重复报。
-            continue
-        text = pom.read_text(encoding="utf-8", errors="replace")
-        for group, artifact in _dependencies(text):
-            if group in deny:
-                findings.append(
-                    Finding(
-                        "error",
-                        redline_id,
-                        template.format(repo=repo, name=name, group=group, artifact=artifact),
+        for filename in filenames:
+            manifest = workspace / repo / filename
+            if not manifest.is_file():
+                # 清单不存在等于该语言不适用；仓缺失由构建暴露，不在此重复报。
+                continue
+            text = manifest.read_text(encoding="utf-8", errors="replace")
+            for group, artifact in _registry_entries(filename, text):
+                if group in deny:
+                    findings.append(
+                        Finding(
+                            "error",
+                            redline_id,
+                            template.format(
+                                repo=repo, name=name, file=filename,
+                                group=group, artifact=artifact,
+                            ),
+                        )
                     )
-                )
     return findings
 
 

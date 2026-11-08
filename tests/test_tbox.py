@@ -67,8 +67,9 @@ def _gateway(**overrides) -> str:
 
 def test_real_tbox_loads_three_layers():
     concepts = load_concepts(ROOT)
-    assert len(concepts["kinds"]) == 6
-    assert len(concepts["capabilities"]) == 14
+    assert len(concepts["kinds"]) == 7
+    # 16 = 原有 14 项 + 唯一 IAM 的两项能力（iam.auth / iam.users）
+    assert len(concepts["capabilities"]) == 16
     assert len(concepts["decisions"]) == 6
 
 
