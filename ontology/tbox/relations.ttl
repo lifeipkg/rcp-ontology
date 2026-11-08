@@ -145,7 +145,7 @@ rcp:depends_artifact a rcp:RelationKind, owl:ObjectProperty ;
     rcp:graph rcp:BuildGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "Maven 坐标依赖（如 rcp-core）。抬版本要波及全图，但不构成运行时可达性。" .
+    rdfs:comment "编译期构件依赖。抬版本要波及全图，但不构成运行时可达性。" .
 
 rcp:aligns_stack a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "aligns_stack" ;

@@ -5,8 +5,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # 架构红线：可机械检查的硬约束，违反即红。由 rcp-ontology 的 check 执行。
 #
-# 每条红线 = 一个 rcp:Redline 个体 + 一个 rcp:spec 规格。
-#   rcp:spec 的 rdf:type 决定执行器（FileScan → file-scan，RegistryScan → registry-scan …）；
+# 每条红线 = 一个 rcp:Redline 个体 + 一个 rcp:spec 规格。#   rcp:spec 的 rdf:type 决定执行器（FileScan → file-scan，RegistryScan → registry-scan …）；
 #   其余谓词即执行参数，装载时 local name 转 snake_case 成为字典键。
 #
 # 书写约定：
@@ -19,46 +18,15 @@
 # 改参数只改本文件，无需改 Python。新增一种 spec.type 才需要写执行器。
 # ─────────────────────────────────────────────────────────────────────────────
 
-rcp:RL-001 a rcp:Redline ;
-    rcp:redlineId "RL-001" ;
-    rcp:slug "patrol-line-no-cross-call" ;
-    rdfs:label "巡查线之间不得互相调用" ;
-    rcp:rationale "巡查线必须可独立部署、独立降级；互调会造成级联降级与责任不清。" ;
-    rcp:rule "kind=patrol-line 的服务，其 dependsOn 中不得出现任何 kind=patrol-line 的服务。" ;
-    rcp:spec [
-        a rcp:RegistryAssert ;
-        rcp:via "kinds.allowedDependsOn"
-    ] .
-
 rcp:RL-002 a rcp:Redline ;
     rcp:redlineId "RL-002" ;
     rcp:slug "external-entry-is-gateway" ;
     rdfs:label "对外入口唯一" ;
-    rcp:rationale "边缘只暴露网关与前端；服务端口直接对外会绕过幂等、状态机与分级处置。" ;
+    rcp:rationale "边缘只暴露网关与前端；服务端口直接对外会绕过统一鉴权、路由与限流。" ;
     rcp:rule "external=true 的服务只允许 kind in [gateway, frontend]；其余服务必须 external=false。" ;
     rcp:spec [
         a rcp:RegistryAssert ;
         rcp:via "kinds.mustBeExternal"
-    ] .
-
-rcp:RL-003 a rcp:Redline ;
-    rcp:redlineId "RL-003" ;
-    rcp:slug "decision-single-source" ;
-    rdfs:label "决策语义唯一来源" ;
-    rcp:rationale "四条线各自发明决策等级会导致处置层无法分级，风险分不可比。" ;
-    rcp:rule """tbox/decisions.ttl 是决策语义的唯一真源。
-rcp-core 的 Decision 枚举与 baseScore() 必须与真源逐字一致；
-contracts/schemas/decision.yaml 是生成物（cli.py render-schema），不得手改；
-其余 OpenAPI / schema 只能 $ref 该文件，不得内联枚举。""" ;
-    rcp:spec [
-        a rcp:CrossSource ;
-        rcp:assert "identical" ;
-        rcp:source (
-            "rcp-ontology/ontology/tbox/decisions.ttl"
-            "rcp-core/src/main/java/com/risk/platform/model/Decision.java"
-            "rcp-contracts/contracts/schemas/decision.yaml"
-        ) ;
-        rcp:message "决策语义不一致：{detail}"
     ] .
 
 rcp:RL-004 a rcp:Redline ;

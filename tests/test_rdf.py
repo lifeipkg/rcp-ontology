@@ -28,8 +28,8 @@ CONCEPTS = {
     "kinds": [
         {"name": "gateway", "must_be_external": True, "is_entry": True,
          "requires_port": True, "requires_contract": True,
-         "allowed_depends_on_kinds": ["patrol-line"]},
-        {"name": "patrol-line", "must_be_external": False, "is_entry": False,
+         "allowed_depends_on_kinds": ["worker"]},
+        {"name": "worker", "must_be_external": False, "is_entry": False,
          "requires_port": True, "requires_contract": True,
          "allowed_depends_on_kinds": []},
         {"name": "frontend", "must_be_external": True, "is_entry": True,
@@ -40,8 +40,8 @@ CONCEPTS = {
          "allowed_depends_on_kinds": []},
     ],
     "capabilities": [
-        {"name": "patrol.dispatch", "owner": "api-gateway"},
-        {"name": "patrol.content.dedup", "owner": "content-patrol"},
+        {"name": "api.relay", "owner": "api-gateway"},
+        {"name": "worker.dedup", "owner": "service-a"},
     ],
     "decisions": [
         {"code": "PASS", "base_score": 0},
@@ -66,8 +66,8 @@ def _transitive_chain():
     """a → b → c：a 传递依赖 c（两跳）。只验图闭包，不涉及红线语义。"""
     return {"services": [
         _service("a", "gateway", 8000, depends_on=["b"]),
-        _service("b", "patrol-line", 8001, depends_on=["c"]),
-        _service("c", "patrol-line", 8002),
+        _service("b", "worker", 8001, depends_on=["c"]),
+        _service("c", "worker", 8002),
     ], "libraries": []}
 
 
@@ -76,7 +76,7 @@ def test_build_rdf_assigns_kind_class():
     g = build_rdf(registry, CONCEPTS)
     assert (RCP["a"], RDF.type, RCP.Gateway) in g
     assert (RCP["a"], RDF.type, RCP.Service) in g
-    assert (RCP["b"], RDF.type, RCP.PatrolLine) in g
+    assert (RCP["b"], RDF.type, RCP.Worker) in g
     assert (RCP["a"], RCP.dependsOn, RCP["b"]) in g
 
 
@@ -122,10 +122,10 @@ def test_sparql_matches_bfs_on_real_registry():
 
 def test_shacl_conforms_on_valid_data():
     registry = {"services": [
-        _service("api-gateway", "gateway", 8080, depends_on=["content-patrol"],
+        _service("api-gateway", "gateway", 8080, depends_on=["service-a"],
                  contracts=["gateway.contract"]),
-        _service("content-patrol", "patrol-line", 8081,
-                 contracts=["patrol.contract"]),
+        _service("service-a", "worker", 8081,
+                 contracts=["worker.contract"]),
     ], "libraries": []}
     g = build_rdf(registry, CONCEPTS)
     conforms, findings = validate_all(g, ONTOLOGY_DIR / "shapes" / "core.ttl", CONCEPTS)
@@ -141,13 +141,13 @@ def test_shacl_catches_missing_port():
     assert any(f.code == "E001" for f in findings)
 
 
-def test_shacl_catches_patrol_line_cross_call():
-    """RL-001：巡查线不得依赖巡查线。SHACL 的 maxCount 0 捕获该违规。"""
+def test_shacl_catches_dependency_kind_violation():
+    """E106：worker 不允许依赖任何服务，SHACL 的 maxCount 0 捕获该违规。"""
     registry = {"services": [
-        _service("a", "patrol-line", 8001, depends_on=["b"]),
-        _service("b", "patrol-line", 8002),
+        _service("a", "worker", 8001, depends_on=["b"]),
+        _service("b", "worker", 8002),
     ], "libraries": []}
     g = build_rdf(registry, CONCEPTS)
     conforms, findings = validate_all(g, ONTOLOGY_DIR / "shapes" / "core.ttl", CONCEPTS)
     assert conforms is False
-    assert any(f.code == "RL-001" for f in findings)
+    assert any(f.code == "E106" for f in findings)

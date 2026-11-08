@@ -9,47 +9,11 @@
 # 不指望它报错；它存在的意义是让"业务叫法 → 种类"的映射在文档里有落点。
 # ─────────────────────────────────────────────────────────────────────────────
 
-rcp:patrol_event a rcp:Term ;
-    rdfs:label "巡查事件" ;
-    rcp:definition "进入平台统一巡查入口的一次业务事实，以 event_id + version 唯一标识。" ;
-    rcp:owner "platform" .
-
 rcp:api_gateway a rcp:Term ;
     rdfs:label "网关" ;
-    rcp:definition "平台对外唯一 HTTP 入口，负责幂等判定、路由、分级处置与巡查线降级。" ;
+    rcp:definition "平台对外唯一 HTTP 入口，负责鉴权透传、路由与上游转发。" ;
     rcp:owner "platform" ;
     rcp:covers rcp:Gateway .
-
-rcp:patrol_line a rcp:Term ;
-    rdfs:label "巡查线" ;
-    rcp:definition "按业务域切分的风控判定单元，四条线为 content / message / account / fund。" ;
-    rcp:owner "platform" ;
-    rcp:covers rcp:PatrolLine .
-
-rcp:patrol_verdict a rcp:Term ;
-    rdfs:label "巡查结论" ;
-    rcp:definition "单条巡查线对事件给出的统一结论，含决策、风险分、原因与明细。" ;
-    rcp:owner "rcp-core" .
-
-rcp:decision a rcp:Term ;
-    rdfs:label "决策" ;
-    rcp:definition "处置等级枚举，取值唯一来自 tbox/decisions.ttl，禁止各服务私造同名枚举。" ;
-    rcp:owner "rcp-core" .
-
-rcp:disposition a rcp:Term ;
-    rdfs:label "分级处置" ;
-    rcp:definition "由网关按决策等级映射出的执行动作（放行/提示/限流/加审/拦截/封禁）。" ;
-    rcp:owner "api-gateway" .
-
-rcp:domain a rcp:Term ;
-    rdfs:label "巡查域" ;
-    rcp:definition "事件所属巡查线的标识，取值 content / message / account / fund。" ;
-    rcp:owner "platform" .
-
-rcp:idempotency_key a rcp:Term ;
-    rdfs:label "幂等键" ;
-    rcp:definition "event_id + version 组合；同键重放不再产生新裁决，旧版本回放被拒绝。" ;
-    rcp:owner "api-gateway" .
 
 rcp:dataway a rcp:Term ;
     rdfs:label "数据网关" ;
@@ -65,7 +29,7 @@ rcp:schema_migration a rcp:Term ;
 
 rcp:ops_console a rcp:Term ;
     rdfs:label "运营控制台" ;
-    rcp:definition "面向风控运营的只读界面，只经 api-gateway 取数，不直连任何后端服务。" ;
+    rcp:definition "面向运营的只读界面，只经 api-gateway 取数，不直连任何后端服务。" ;
     rcp:owner "platform" ;
     rcp:covers rcp:Frontend .
 

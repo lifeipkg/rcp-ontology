@@ -13,7 +13,6 @@ import yaml
 from checker.checks import (
     check_capability_ownership,
     check_contracts_exist,
-    check_decision_alignment,
     check_declarations,
     check_dependency_graph,
     check_expected_state,
@@ -37,8 +36,8 @@ CONCEPTS = {
     "kinds": [
         {"name": "gateway", "must_be_external": True, "is_entry": True,
          "requires_port": True, "requires_contract": True,
-         "allowed_depends_on_kinds": ["patrol-line"]},
-        {"name": "patrol-line", "must_be_external": False, "is_entry": False,
+         "allowed_depends_on_kinds": ["worker"]},
+        {"name": "worker", "must_be_external": False, "is_entry": False,
          "requires_port": True, "requires_contract": True,
          "allowed_depends_on_kinds": []},
         {"name": "frontend", "must_be_external": True, "is_entry": True,
@@ -49,27 +48,23 @@ CONCEPTS = {
          "allowed_depends_on_kinds": []},
     ],
     "capabilities": [
-        {"name": "patrol.dispatch", "owner": "api-gateway"},
-        {"name": "patrol.content.dedup", "owner": "content-patrol"},
-    ],
-    "decisions": [
-        {"code": "PASS", "base_score": 0},
-        {"code": "INTERCEPT", "base_score": 80},
+        {"name": "api.relay", "owner": "api-gateway"},
+        {"name": "worker.dedup", "owner": "service-a"},
     ],
 }
 
 
 def service(**overrides):
     base = {
-        "name": "content-patrol",
-        "repo": "rcp-content-patrol",
-        "kind": "patrol-line",
+        "name": "service-a",
+        "repo": "rcp-service-a",
+        "kind": "worker",
         "port": 8081,
         "external": False,
         "owner": "risk-content",
-        "capabilities": ["patrol.content.dedup"],
+        "capabilities": ["worker.dedup"],
         "depends_on": [],
-        "contracts": ["contracts/openapi/content-patrol.yaml"],
+        "contracts": ["contracts/openapi/service-a.yaml"],
     }
     base.update(overrides)
     return base
@@ -83,8 +78,8 @@ def gateway(**overrides):
         "port": 8080,
         "external": True,
         "owner": "platform",
-        "capabilities": ["patrol.dispatch"],
-        "depends_on": ["content-patrol"],
+        "capabilities": ["api.relay"],
+        "depends_on": ["service-a"],
         "contracts": ["contracts/openapi/api-gateway.yaml"],
     }
     base.update(overrides)
@@ -146,94 +141,6 @@ def test_frontend_without_contracts_is_fine(tmp_path: Path):
     assert check_contracts_exist(tmp_path, {"services": [web]}, CONCEPTS) == []
 
 
-DECISION_SPEC = {
-    "source": [
-        "ontology/tbox/decisions.ttl",
-        "rcp-core/src/main/java/com/risk/platform/model/Decision.java",
-        "contracts/schemas/decision.yaml",
-    ]
-}
-
-_JAVA = """public enum Decision {{
-{consts};
-
-    public int baseScore() {{
-        return switch (this) {{
-{cases}
-        }};
-    }}
-}}
-"""
-
-
-def _java_decisions(pairs: list[tuple[str, int]]) -> str:
-    return _JAVA.format(
-        consts=",\n".join(f"    {code}" for code, _ in pairs),
-        cases="\n".join(f"            case {code} -> {score};" for code, score in pairs),
-    )
-
-
-def _workspace_with(tmp_path: Path, *, java: str | None = None, schema: dict | None = None) -> Path:
-    """构造工作区：真源在 CONCEPTS 里，对端落盘为 Java 与生成物 YAML。"""
-    src = tmp_path / "rcp-core" / "src" / "main" / "java" / "com" / "risk" / "platform" / "model"
-    src.mkdir(parents=True)
-    (src / "Decision.java").write_text(
-        java if java is not None else _java_decisions([("PASS", 0), ("INTERCEPT", 80)]),
-        encoding="utf-8",
-    )
-    schemas = tmp_path / "contracts" / "schemas"
-    schemas.mkdir(parents=True)
-    (schemas / "decision.yaml").write_text(
-        yaml.safe_dump(
-            schema if schema is not None
-            else {"enum": ["PASS", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 80}}
-        ),
-        encoding="utf-8",
-    )
-    return tmp_path
-
-
-def test_decision_aligned_across_three_sources(tmp_path: Path):
-    workspace = _workspace_with(tmp_path)
-    assert check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace) == []
-
-
-def test_decision_enum_drift_detected(tmp_path: Path):
-    workspace = _workspace_with(
-        tmp_path, schema={"enum": ["PASS", "WARN", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 80}}
-    )
-    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
-
-
-def test_decision_score_drift_detected(tmp_path: Path):
-    """枚举一致但分值漂移，同样要红——分值决定处置档位，不能只比名字。"""
-    workspace = _workspace_with(
-        tmp_path, schema={"enum": ["PASS", "INTERCEPT"], "x-base-score": {"PASS": 0, "INTERCEPT": 99}}
-    )
-    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
-
-
-def test_java_enum_drift_detected(tmp_path: Path):
-    """实现侧少一个决策等级，是"契约先行、实现没跟上"的典型漂移。"""
-    workspace = _workspace_with(tmp_path, java=_java_decisions([("PASS", 0)]))
-    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
-
-
-def test_java_score_drift_detected(tmp_path: Path):
-    workspace = _workspace_with(tmp_path, java=_java_decisions([("PASS", 0), ("INTERCEPT", 50)]))
-    assert "RL-003" in codes(check_decision_alignment(CONCEPTS, DECISION_SPEC, workspace))
-
-
-def test_decision_source_missing_is_skipped_explicitly(tmp_path: Path):
-    """对端都不在工作区时不许假装通过：输出 S003，说明比对未执行。"""
-    findings = check_decision_alignment(CONCEPTS, DECISION_SPEC, tmp_path)
-    assert "S003" in codes(findings, level="info")
-    assert "RL-003" not in codes(findings)
-
-
-def test_decision_missing_score_in_source_is_error():
-    broken = {"decisions": [{"code": "PASS", "base_score": None}]}
-    assert "RL-003" in codes(check_decision_alignment(broken, DECISION_SPEC, None))
 
 
 DATAWAY = {
@@ -263,7 +170,7 @@ def test_spec_unknown_type_is_error():
 
 
 def test_spec_missing_required_field_is_error():
-    redlines = {"constraints": [{"id": "RL-003", "spec": {"type": "cross-source"}}], "exceptions": []}
+    redlines = {"constraints": [{"id": "RL-900", "spec": {"type": "file-scan", "include": ["*.sql"]}}], "exceptions": []}
     assert "E302" in codes(check_rule_specs(redlines))
 
 
@@ -286,8 +193,7 @@ def test_file_scan_without_match_is_error():
 def test_valid_spec_has_no_findings():
     redlines = {
         "constraints": [
-            {"id": "RL-001", "spec": {"type": "registry-assert", "via": "kinds.allowed_depends_on_kinds"}},
-            {"id": "RL-003", "spec": {"type": "cross-source", "source": ["ontology/tbox/decisions.ttl"], "assert": "identical"}},
+            {"id": "RL-900", "spec": {"type": "registry-assert", "via": "kinds.allowed_depends_on_kinds"}},
             {"id": "RL-004", "spec": {"type": "file-scan", "include": ["*.sql"], "match": "create"}},
             {"id": "RL-005", "spec": {"type": "registry-scan", "include": ["pom.xml"], "extract": "dependency.groupId", "deny_values": ["mysql"], "allow_kinds": ["data-gateway"]}},
             {"id": "RL-007", "spec": {"type": "upstream-scan", "include": ["*.yml"], "scan_prefix": "rcp-ops/", "match": "http", "internal_hosts": {"from": "registry"}}},
@@ -326,7 +232,7 @@ UPSTREAM_SPEC = {
 
 
 def test_ddl_outside_migrations_is_error(tmp_path: Path):
-    repo = tmp_path / "rcp-content-patrol"
+    repo = tmp_path / "rcp-service-a"
     repo.mkdir()
     (repo / "schema.sql").write_text("CREATE TABLE t (id INT);", encoding="utf-8")
     assert "RL-004" in codes(run_file_scan(DDL_SPEC, tmp_path, "RL-004"))
@@ -349,7 +255,7 @@ def test_ddl_in_detached_migrations_repo_is_allowed(tmp_path: Path):
 
 def test_ddl_in_business_repo_migrations_dir_is_still_error(tmp_path: Path):
     """业务仓自建 migrations/ 不能绕过 RL-004。"""
-    sneaky = tmp_path / "rcp-content-patrol" / "migrations"
+    sneaky = tmp_path / "rcp-service-a" / "migrations"
     sneaky.mkdir(parents=True)
     (sneaky / "V9.9.9__hack.sql").write_text("ALTER TABLE t ADD c INT;", encoding="utf-8")
     assert "RL-004" in codes(run_file_scan(DDL_SPEC, tmp_path, "RL-004"))
@@ -365,7 +271,7 @@ def test_ddl_inside_worktree_is_not_scanned_twice(tmp_path: Path):
 
 
 def test_jdbc_driver_in_business_service_is_error(tmp_path: Path):
-    repo = tmp_path / "rcp-content-patrol"
+    repo = tmp_path / "rcp-service-a"
     repo.mkdir()
     (repo / "pom.xml").write_text(_pom_with("com.mysql", "mysql-connector-j"), encoding="utf-8")
     registry = {"services": [service(), DATAWAY], "libraries": []}
@@ -437,7 +343,7 @@ def test_go_db_driver_in_data_gateway_is_allowed(tmp_path: Path):
 
 def test_pom_and_gomod_are_both_scanned(tmp_path: Path):
     """同一仓同时有两种清单时，两处违规都要报，不能只报第一个。"""
-    repo = tmp_path / "rcp-content-patrol"
+    repo = tmp_path / "rcp-service-a"
     repo.mkdir()
     (repo / "pom.xml").write_text(_pom_with("org.postgresql", "postgresql"), encoding="utf-8")
     (repo / "go.mod").write_text(DIRTY_GOMOD, encoding="utf-8")
@@ -477,11 +383,11 @@ def _compose(tmp_path: Path, line: str) -> Path:
     return target
 
 
-UPSTREAM_LINE = "      PATROL_ROUTES_ENDPOINTS_CONTENT: http://content-patrol:8081"
+UPSTREAM_LINE = "      PATROL_ROUTES_ENDPOINTS_CONTENT: http://service-a:8081"
 EXCEPTION = {
     "redline": "RL-007",
     "scope": "rcp-ops/**",
-    "match": "http://content-patrol:\\d+",
+    "match": "http://service-a:\\d+",
     "reason": "服务发现未接入",
     "owner": "platform",
     "review_by": "2099-01-01",
@@ -507,10 +413,10 @@ def test_registered_exception_downgrades_to_warning(tmp_path: Path):
 
 
 def test_exception_without_scope_match_still_errors(tmp_path: Path):
-    _compose(tmp_path, "      X: http://message-patrol:8082")
+    _compose(tmp_path, "      X: http://service-b:8082")
     findings = run_upstream_scan(
         UPSTREAM_SPEC, tmp_path,
-        {"services": [service(name="message-patrol", port=8082)]}, [EXCEPTION], "RL-007",
+        {"services": [service(name="service-b", port=8082)]}, [EXCEPTION], "RL-007",
     )
     assert "RL-007" in codes(findings)
 
@@ -548,7 +454,7 @@ def test_new_file_scan_rule_runs_without_python_change(tmp_path: Path):
 
 
 def test_unregistered_repo_directory_is_error(tmp_path: Path):
-    for name in ("rcp-content-patrol", "rcp-api-gateway", "rcp-ghost"):
+    for name in ("rcp-service-a", "rcp-api-gateway", "rcp-ghost"):
         (tmp_path / name).mkdir()
     registry = {"services": [service(), gateway()], "libraries": []}
     findings = check_repo_registration(tmp_path, registry, complete=True)
@@ -558,7 +464,7 @@ def test_unregistered_repo_directory_is_error(tmp_path: Path):
 
 
 def test_registered_repo_missing_dir_only_checked_in_complete_workspace(tmp_path: Path):
-    (tmp_path / "rcp-content-patrol").mkdir()
+    (tmp_path / "rcp-service-a").mkdir()
     registry = {"services": [service(), gateway()], "libraries": []}
     partial = check_repo_registration(tmp_path, registry, complete=False)
     assert [f for f in partial if "rcp-api-gateway" in f.message] == []
@@ -566,14 +472,14 @@ def test_registered_repo_missing_dir_only_checked_in_complete_workspace(tmp_path
 
 def test_workspace_complete_needs_two_registered_repos(tmp_path: Path):
     registry = {"services": [service(), gateway()], "libraries": []}
-    (tmp_path / "rcp-content-patrol").mkdir()
+    (tmp_path / "rcp-service-a").mkdir()
     assert workspace_is_complete(tmp_path, registry) is False
     (tmp_path / "rcp-api-gateway").mkdir()
     assert workspace_is_complete(tmp_path, registry) is True
 
 
 def test_worktree_is_not_counted_as_independent_repo(tmp_path: Path):
-    for name in ("rcp-content-patrol", "rcp-api-gateway"):
+    for name in ("rcp-service-a", "rcp-api-gateway"):
         (tmp_path / name).mkdir()
     worktree = tmp_path / "rcp-api-gateway-team"
     worktree.mkdir()
@@ -638,14 +544,14 @@ def test_expired_expected_state_restores_warning():
 
 
 def test_stale_expected_no_dependents_is_warning():
-    # gateway 依赖 content-patrol，故其入度为 1，声明"无依赖"即过时。
+    # gateway 依赖 service-a，故其入度为 1，声明"无依赖"即过时。
     s = service(expected=_expected())
     findings = check_dependency_graph({"services": [gateway(), s]}, CONCEPTS)
     assert "W306" in codes(findings, level="warn")
 
 
 def test_stale_expected_unreachable_is_warning():
-    # content-patrol 可从 gateway 到达，声明"不可达"即过时。
+    # service-a 可从 gateway 到达，声明"不可达"即过时。
     s = service(expected=_expected())
     findings = check_dependency_graph({"services": [gateway(), s]}, CONCEPTS)
     assert "W306" in codes(findings, level="warn")
@@ -681,15 +587,15 @@ def test_valid_expected_state_has_no_findings():
 
 
 def test_capability_owner_must_be_registered():
-    concepts = {"capabilities": [{"name": "patrol.dispatch", "owner": "ghost"}],
-                "kinds": [], "decisions": []}
+    concepts = {"capabilities": [{"name": "api.relay", "owner": "ghost"}],
+                "kinds": []}
     findings = check_capability_ownership({"services": [gateway()]}, concepts)
     assert "E111" in codes(findings)
 
 
 def test_capability_owner_must_actually_hold_it():
-    concepts = {"capabilities": [{"name": "patrol.dispatch", "owner": "content-patrol"}],
-                "kinds": [], "decisions": []}
+    concepts = {"capabilities": [{"name": "api.relay", "owner": "service-a"}],
+                "kinds": []}
     findings = check_capability_ownership({"services": [gateway(), service()]}, concepts)
     assert "E112" in codes(findings)
 
@@ -713,7 +619,7 @@ def test_duplicate_functional_property_is_load_error(tmp_path: Path):
     graph = Graph().parse(
         data="""@prefix rcp: <https://risk-control.platform/ontology#> .
 rcp:platform a rcp:Platform ; rcp:platformName "t" .
-rcp:x a rcp:PatrolLine, rcp:Service ;
+rcp:x a rcp:Worker, rcp:Service ;
     rcp:repo "rcp-x" ; rcp:port 8080, 8090 ;
     rcp:external false ; rcp:owner "platform" .
 """,
@@ -769,13 +675,12 @@ def _write_ontology(root: Path, *, abox_extra: str = "") -> Path:
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-rcp:PatrolLine a owl:Class, rcp:Kind ;
+rcp:Worker a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;
-    rdfs:label "巡查线" ;
+    rdfs:label "执行单元" ;
     rcp:mustBeExternal false ; rcp:isEntry false ;
     rcp:requiresPort true ; rcp:requiresContract true .
 
-rcp:PASS a rcp:Decision ; rdfs:label "放行" ; rcp:baseScore 0 .
 """,
         encoding="utf-8",
     )
@@ -787,7 +692,7 @@ rcp:platform a rcp:Platform ; rcp:registrySchema "rcp.registry/v2" ; rcp:platfor
     )
     (root / "ontology" / "abox" / "services.ttl").write_text(
         """@prefix rcp: <https://risk-control.platform/ontology#> .
-rcp:ghost a rcp:PatrolLine, rcp:Service ;
+rcp:ghost a rcp:Worker, rcp:Service ;
     rcp:repo "rcp-ghost" ; rcp:port 8099 ;
     rcp:external false ; rcp:owner "platform" ;
     rcp:hasCapability rcp:patrol.ghost .

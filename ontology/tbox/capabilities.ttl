@@ -7,39 +7,9 @@
 # 服务登记里出现的 rcp:hasCapability 目标必须在此立名（E202）；owner 必须是真正
 # 持有它的服务或库（E111/E112），否则审批与责任会落在不实现该能力的人身上。
 #
-# 命名规范（E114）：点分小写，如 patrol.dispatch。能力名即实例 IRI 的 local name，
+# 命名规范（E114）：点分小写，如 iam.auth。能力名即实例 IRI 的 local name，
 # 不再另写 rcp:name —— 同一事实只有一个位置。
 # ─────────────────────────────────────────────────────────────────────────────
-
-rcp:patrol.dispatch a rcp:Capability ;
-    rdfs:label "巡查派发" ;
-    rcp:definition "受理统一巡查事件并按 domain 路由到对应巡查线。" ;
-    rcp:implementedBy rcp:api-gateway .
-
-rcp:patrol.domains a rcp:Capability ;
-    rdfs:label "巡查线自描述" ;
-    rcp:definition "返回平台当前支持的巡查线清单。" ;
-    rcp:implementedBy rcp:api-gateway .
-
-rcp:patrol.content.dedup a rcp:Capability ;
-    rdfs:label "内容判重" ;
-    rcp:definition "岗位文案近重复检测（SimHash + 3-gram + 分段索引）。" ;
-    rcp:implementedBy rcp:content-patrol .
-
-rcp:patrol.message.ac a rcp:Capability ;
-    rdfs:label "消息命中" ;
-    rcp:definition "会话文本敏感词与变体命中（AC 自动机 + 角色分级）。" ;
-    rcp:implementedBy rcp:message-patrol .
-
-rcp:patrol.account.rule a rcp:Capability ;
-    rdfs:label "账号规则" ;
-    rcp:definition "接码、养号等账号侧风险规则判定。" ;
-    rcp:implementedBy rcp:account-patrol .
-
-rcp:patrol.fund.rule a rcp:Capability ;
-    rdfs:label "资金规则" ;
-    rcp:definition "补贴薅取等资金侧风险规则判定。" ;
-    rcp:implementedBy rcp:fund-patrol .
 
 rcp:iam.auth a rcp:Capability ;
     rdfs:label "身份认证" ;
@@ -73,20 +43,5 @@ rcp:schema.version a rcp:Capability ;
 
 rcp:ops.console a rcp:Capability ;
     rdfs:label "运营控制台" ;
-    rcp:definition "风控运营前端，经网关查看派发结果与巡查线状态。" ;
+    rcp:definition "运营前端，经网关访问后端。" ;
     rcp:implementedBy rcp:web .
-
-rcp:decision.model a rcp:Capability ;
-    rdfs:label "决策模型" ;
-    rcp:definition "统一决策枚举与风险分映射（库能力，非 HTTP 服务）。" ;
-    rcp:implementedBy rcp:rcp-core .
-
-rcp:patrol.pipeline a rcp:Capability ;
-    rdfs:label "巡查流水线" ;
-    rcp:definition "同构巡查流水线抽象，各巡查线按同一骨架实现。" ;
-    rcp:implementedBy rcp:rcp-core .
-
-rcp:rule.engine a rcp:Capability ;
-    rdfs:label "规则引擎" ;
-    rcp:definition "条件-判定-分值的规则执行内核。" ;
-    rcp:implementedBy rcp:rcp-core .

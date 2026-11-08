@@ -1,7 +1,7 @@
 """本体检查器 CLI。
 
 真源是本仓 ``ontology/`` 下的 TTL，因此 ``--ontology`` 是主参数（缺省即本仓）。
-契约仓只提供 OpenAPI 与生成物，用 ``--contracts`` 定位，且只有 check/render-schema 需要。
+契约仓只提供 OpenAPI，用 ``--contracts`` 定位，且只有 check 需要。
 
 用法：
     # 一致性检查（-w 指多仓工作区根；不给则跨仓判定输出 S001 明示跳过）
@@ -18,9 +18,6 @@
     python checker/cli.py export --out /tmp/services.ttl
     python checker/cli.py shacl
     python checker/cli.py sparql --service dataway
-
-    # 派生：由 tbox/decisions.ttl 生成 contracts/schemas/decision.yaml（勿手改生成物）
-    python checker/cli.py render-schema --contracts ../rcp-contracts --out ../rcp-contracts/contracts/schemas/decision.yaml
 """
 
 from __future__ import annotations
@@ -554,53 +551,6 @@ def cmd_sparql(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_render_schema(args: argparse.Namespace) -> int:
-    """由 tbox/decisions.ttl 生成 contracts/schemas/decision.yaml。
-
-    生成物不是真源：它是契约层（OpenAPI / 其它 schema）能 $ref 到的机器可读形态，
-    真源始终是 decisions.ttl。手工拼串而不是 yaml.safe_dump，是为了让产物稳定可 diff
-    —— 生成物的价值在于"改了真源才变"，任何额外波动都会掩盖真正的改动。
-    """
-    root = _ontology_root(args)
-    contracts = _contracts_root(args)
-    try:
-        concepts = load_concepts(root)
-    except LoadError as exc:
-        print(f"[rcp-ontology] 声明不可用: {exc}", file=sys.stderr)
-        return 2
-
-    decisions = concepts.get("decisions") or []
-    if not decisions:
-        print("[rcp-ontology] decisions.ttl 里没有决策等级", file=sys.stderr)
-        return 2
-
-    lines = [
-        "schema: rcp.contract.schema/v1",
-        "name: Decision",
-        "zh: 决策等级",
-        "type: string",
-        "# 生成物，勿手改：由 rcp-ontology 的 `cli.py render-schema` 从",
-        "# rcp-ontology/ontology/tbox/decisions.ttl 产出。改真源后重跑命令。",
-        "description: 处置等级枚举，唯一真源为 rcp-ontology/ontology/tbox/decisions.ttl。分值见 rcp:baseScore。",
-        "enum:",
-    ]
-    lines += [f"  - {d['code']}" for d in decisions]
-    lines.append("x-base-score:")
-    lines += [f"  {d['code']}: {d['base_score']}" for d in decisions]
-    text = "\n".join(lines) + "\n"
-
-    target = Path(args.out) if args.out else None
-    if target is None:
-        if contracts is None:
-            print("[rcp-ontology] 需要 --out 或 --contracts 才能确定输出路径", file=sys.stderr)
-            return 2
-        target = contracts / "contracts" / "schemas" / "decision.yaml"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
-    print(f"已生成: {target}（{len(decisions)} 个决策等级）")
-    return 0
-
-
 def _add_common(parser: argparse.ArgumentParser, *, contracts: bool = False) -> None:
     """给子命令挂共通参数：--ontology 是主入口，--contracts 只有需要契约文件时才挂。"""
     parser.add_argument(
@@ -683,14 +633,6 @@ def build_parser() -> argparse.ArgumentParser:
     sparql.add_argument("--service", required=True, help="服务名（abox 里的实例 local name）")
     sparql.add_argument("--json", action="store_true", help="输出 JSON")
     sparql.set_defaults(func=cmd_sparql)
-
-    schema = sub.add_parser(
-        "render-schema",
-        help="由 tbox/decisions.ttl 生成 contracts/schemas/decision.yaml（生成物，勿手改）",
-    )
-    _add_common(schema, contracts=True)
-    schema.add_argument("--out", help="输出路径；缺省 <contracts>/contracts/schemas/decision.yaml")
-    schema.set_defaults(func=cmd_render_schema)
 
     return parser
 

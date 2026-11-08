@@ -27,8 +27,8 @@ CONCEPTS = {
     "kinds": [
         {"name": "gateway", "must_be_external": True, "is_entry": True,
          "requires_port": True, "requires_contract": True,
-         "allowed_depends_on_kinds": ["patrol-line", "data-gateway"]},
-        {"name": "patrol-line", "must_be_external": False, "is_entry": False,
+         "allowed_depends_on_kinds": ["worker", "data-gateway"]},
+        {"name": "worker", "must_be_external": False, "is_entry": False,
          "requires_port": True, "requires_contract": True,
          "allowed_depends_on_kinds": []},
         {"name": "data-gateway", "must_be_external": False, "is_entry": False,
@@ -87,7 +87,7 @@ def test_graphs_are_separated_by_domain(relations):
     """同一对节点上的不同关系必须落在不同图里，否则可达性会被污染。"""
     registry = {"services": [
         service("gw", "gateway", relations_map={"calls": ["a"], "queries": ["dw"]}),
-        service("a", "patrol-line", port=8001),
+        service("a", "worker", port=8001),
         service("dw", "data-gateway", port=8090),
     ], "libraries": []}
 
@@ -111,8 +111,8 @@ def test_non_reachability_edge_does_not_make_node_reachable(relations):
 def test_cycle_reported_on_non_call_graph(relations):
     """成环在每张图上都判：构建图的双向引用同样是错误，只是措辞标注图名。"""
     registry = {"services": [
-        service("a", "patrol-line", relations_map={"depends_artifact": ["b"]}, port=8001),
-        service("b", "patrol-line", relations_map={"depends_artifact": ["a"]}, port=8002),
+        service("a", "worker", relations_map={"depends_artifact": ["b"]}, port=8001),
+        service("b", "worker", relations_map={"depends_artifact": ["a"]}, port=8002),
     ], "libraries": []}
 
     findings = check_dependency_graph(registry, CONCEPTS, relations)
@@ -125,7 +125,7 @@ def test_e116_undeclared_relation(relations):
     """登记里出现未声明的关系名 = 那条边绕过了全部关系级判定。"""
     registry = {"services": [
         service("gw", "gateway", relations_map={"phone_home": ["a"]}),
-        service("a", "patrol-line", port=8001),
+        service("a", "worker", port=8001),
     ], "libraries": []}
 
     findings = check_relations(registry, relations, CONCEPTS)
@@ -137,7 +137,7 @@ def test_e117_target_kind_violation(relations):
     """calls 的目标必须是服务；指向库（构建期依赖）是建模错误。"""
     registry = {
         "services": [service("gw", "gateway", relations_map={"calls": ["core"]})],
-        "libraries": [{"name": "core", "repo": "rcp-core", "owner": "platform"}],
+        "libraries": [{"name": "core", "repo": "shared-lib", "owner": "platform"}],
     }
 
     findings = check_relations(registry, relations, CONCEPTS)
@@ -150,7 +150,7 @@ def test_e105_only_for_relations_declaring_service_target(relations):
     否则血缘边会被 E105 全量误报——这正是"关系级判据必须由声明驱动"的反面教材。
     """
     registry = {"services": [
-        service("a", "patrol-line", relations_map={
+        service("a", "worker", relations_map={
             "reads_table": ["job_postings"],
             "queries": ["ghost"],
         }),
@@ -194,7 +194,7 @@ def test_exporter_marks_reachability_with_summary_edge(relations):
     """可达性图上的关系同时产出 typed 边与 dependsOn 汇总边；数据边只出 typed。"""
     registry = {"services": [
         service("gw", "gateway", relations_map={"calls": ["a"], "queries": ["dw"]}),
-        service("a", "patrol-line", port=8001),
+        service("a", "worker", port=8001),
         service("dw", "data-gateway", port=8090),
     ], "libraries": []}
 
@@ -208,5 +208,5 @@ def test_exporter_marks_reachability_with_summary_edge(relations):
 
 
 def test_kind_class_normalises_kind_names():
-    assert kind_class("patrol-line") == "PatrolLine"
+    assert kind_class("worker") == "Worker"
     assert kind_class("meta") == "Meta"

@@ -12,7 +12,7 @@
 # 判据：一个谓词若没有在这里声明 domain/range，它就不是平台词汇，而是拼错。
 #
 # 本体分五层，目录即层名：
-#   tbox/    概念 —— 存在什么（种类、能力、决策、关系、术语）
+#   tbox/    概念 —— 存在什么（种类、能力、关系、术语）
 #   abox/    实例 —— 本平台登记了什么（服务、库、边、平台配置）
 #   policy/  规则 —— 什么算违规（红线与例外）
 #   shapes/  约束 —— 图形状（SHACL）
@@ -31,14 +31,13 @@
 
 <https://risk-control.platform/ontology>
     a owl:Ontology ;
-    rdfs:label "风控平台本体" ;
-    owl:versionInfo "2.0.0" ;
-    owl:versionIRI <https://risk-control.platform/ontology/2.0.0> ;
+    rdfs:label "平台本体" ;
+    owl:versionInfo "3.0.0" ;
+    owl:versionIRI <https://risk-control.platform/ontology/3.0.0> ;
     dcterms:hasPart
         "tbox/schema.ttl" ,
         "tbox/kinds.ttl" ,
         "tbox/capabilities.ttl" ,
-        "tbox/decisions.ttl" ,
         "tbox/relations.ttl" ,
         "tbox/terms.ttl" ,
         "abox/platform.ttl" ,
@@ -48,12 +47,10 @@
     rdfs:comment """本目录下的 TTL 是平台声明层的唯一真源；契约仓只保留接口契约（OpenAPI 与消息 schema）。
 
 分层（目录即层）：
-
   tbox/    概念 —— 存在什么
     schema.ttl        类与属性的词汇层（本体的骨架，含本体头）
     kinds.ttl         服务种类及其五个行为属性
     capabilities.ttl  能力立名与归属
-    decisions.ttl     决策等级与基准分（处置语义唯一真源）
     relations.ttl     关系种类、分域图与端点约束
     terms.ttl         业务术语与概念的对应
 
@@ -88,9 +85,6 @@ rcp:Kind        a owl:Class ; rdfs:label "种类" ;
 rcp:Capability  a owl:Class ; rdfs:label "能力" ;
                 rdfs:comment "可被服务或库实现的功能单元，owner 由 rcp:implementedBy 唯一确定。" .
 
-rcp:Decision    a owl:Class ; rdfs:label "决策等级" ;
-                rdfs:comment "处置等级枚举，唯一真源。分值由 rcp:baseScore 给出。" .
-
 rcp:Term        a owl:Class ; rdfs:label "术语" ;
                 rdfs:comment "业务叫法与概念的对应关系。立名先于实现。" .
 
@@ -112,8 +106,6 @@ rcp:Exception   a owl:Class ; rdfs:label "红线例外" ;
 # 检查器据此选择执行器；新增类型 = 新增一个类 + 一个执行器。
 rcp:RegistryAssert a owl:Class ; rdfs:label "登记断言" ;
                    rdfs:comment "判定由 TBox 种类属性承载，spec 只指明 via。" .
-rcp:CrossSource    a owl:Class ; rdfs:label "跨源比对" ;
-                   rdfs:comment "多份来源逐字比对（决策枚举、分值）。" .
 rcp:FileScan       a owl:Class ; rdfs:label "文件扫描" ;
                    rdfs:comment "按后缀遍历工作区，正则命中即报。" .
 rcp:RegistryScan   a owl:Class ; rdfs:label "登记遍历扫描" ;
@@ -177,8 +169,6 @@ rcp:name          a owl:DatatypeProperty ; rdfs:range xsd:string .
 rcp:health        a owl:DatatypeProperty ; rdfs:range xsd:string .
 rcp:contract      a owl:DatatypeProperty ; rdfs:range xsd:string .
 rcp:definition    a owl:DatatypeProperty ; rdfs:range xsd:string .
-rcp:meaning       a owl:DatatypeProperty ; rdfs:range xsd:string .
-rcp:baseScore     a owl:DatatypeProperty ; rdfs:range xsd:integer .
 
 # 种类行为属性：检查器判定的全部依据（见 README 的属性表）。
 rcp:mustBeExternal   a owl:DatatypeProperty ; rdfs:range xsd:boolean .

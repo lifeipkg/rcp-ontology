@@ -50,7 +50,6 @@ REQUIRED_SERVICE_FIELDS = ("name", "repo", "kind", "external", "owner", "capabil
 # 新增一条已支持类型的红线只需在 policy/redlines.ttl 写 spec，无需改本文件。
 RULE_SPEC_TYPES: dict[str, dict[str, tuple[str, ...]]] = {
     "registry-assert": {"required": ("via",)},
-    "cross-source": {"required": ("source", "assert")},
     "file-scan": {"required": ("include", "match")},
     "registry-scan": {"required": ("include", "extract", "deny_values", "allow_kinds")},
     "upstream-scan": {"required": ("include", "scan_prefix", "match", "internal_hosts")},
@@ -124,135 +123,6 @@ def check_registry_shape(registry: dict[str, Any]) -> list[Finding]:
                     Finding("error", "E002", f"端口 {port} 被 {ports[port]} 与 {name} 同时占用")
                 )
             ports[port] = name
-    return findings
-
-
-# ── RL-003 决策语义：TTL 真源 vs Java 实现 vs 生成物 ────────────────────────
-# 真源是 tbox/decisions.ttl；其余两份是受检对端，不是第二份真源：
-#   .java —— rcp-core 的 Decision 枚举与 baseScore()，实现侧必须逐字一致；
-#   .yaml —— contracts/schemas/decision.yaml，由 cli.py render-schema 生成的派生物，
-#            手改即与真源不一致，本检查即为"生成物被改动"的告警。
-# 对端路径相对工作区根；单仓时对端缺席，输出 S003 明示跳过，不伪装通过。
-
-_JAVA_ENUM_BODY = re.compile(r"enum\s+Decision\s*\{([^;}]*)")
-_JAVA_CONST = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*(?:,|;)?\s*$", re.M)
-_JAVA_CASE = re.compile(r"case\s+([A-Z][A-Z0-9_]*)\s*->\s*(-?\d+)")
-_JAVA_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-_JAVA_LINE_COMMENT = re.compile(r"//[^\n]*")
-
-
-def _read_java_decisions(path: Path) -> tuple[list[str], dict[str, int]]:
-    """从 Decision.java 抽取枚举常量与 baseScore 分支的映射。"""
-    text = path.read_text(encoding="utf-8")
-    body = _JAVA_ENUM_BODY.search(text)
-    if not body:
-        raise ValueError("找不到 `enum Decision {`")
-    cleaned = _JAVA_LINE_COMMENT.sub("", _JAVA_BLOCK_COMMENT.sub("", body.group(1)))
-    codes = [m.group(1) for m in _JAVA_CONST.finditer(cleaned)]
-    scores = {m.group(1): int(m.group(2)) for m in _JAVA_CASE.finditer(text)}
-    return codes, scores
-
-
-def _read_schema_decisions(path: Path) -> tuple[list[str], dict[str, int]]:
-    """从生成的 decision.yaml 抽取 enum 与 x-base-score。"""
-    import yaml  # 只为读生成物，真源不经过 YAML
-
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return list(data.get("enum") or []), dict(data.get("x-base-score") or {})
-
-
-def check_decision_alignment(
-    concepts: dict[str, list[dict[str, Any]]],
-    spec: dict[str, Any] | None = None,
-    workspace_root: Path | None = None,
-) -> list[Finding]:
-    """RL-003 决策枚举与分值在真源、实现与生成物之间逐字一致。
-
-    真源内部先自检（每项必须有分值），再逐个对端比对。对端路径取 spec 的
-    ``source`` 列表，按扩展名选择读取器；``.ttl`` 是真源本身，跳过。
-    """
-    codes = [item.get("code") for item in concepts["decisions"]]
-    scores = {item.get("code"): item.get("base_score") for item in concepts["decisions"]}
-
-    findings: list[Finding] = []
-    missing = [code for code, score in scores.items() if score is None]
-    if missing:
-        findings.append(
-            Finding("error", "RL-003", f"真源 decisions.ttl 有决策缺 baseScore: {', '.join(missing)}")
-        )
-        return findings
-
-    sources = (spec or {}).get("source") or []
-    if isinstance(sources, str):
-        sources = [sources]
-    if not sources:
-        findings.append(
-            Finding("info", "S003", "RL-003 未声明 spec.source，跨源比对未执行")
-        )
-        return findings
-
-    checked = 0
-    absent: list[str] = []
-    for rel in sources:
-        if str(rel).endswith(".ttl"):
-            continue  # 真源自身
-        if workspace_root is None:
-            absent.append(str(rel))
-            continue
-        path = Path(workspace_root) / str(rel)
-        if not path.is_file():
-            absent.append(str(rel))
-            continue
-        checked += 1
-        suffix = path.suffix.lower()
-        try:
-            if suffix == ".java":
-                other_codes, other_scores = _read_java_decisions(path)
-            elif suffix in {".yaml", ".yml"}:
-                other_codes, other_scores = _read_schema_decisions(path)
-            else:
-                findings.append(
-                    Finding("error", "RL-003", f"{rel} 无可用的读取器（支持 .java / .yaml / .ttl）")
-                )
-                continue
-        except Exception as exc:  # noqa: BLE001 - 对端不可读即红
-            findings.append(Finding("error", "RL-003", f"{rel} 无法解析: {exc}"))
-            continue
-
-        if other_codes != codes:
-            findings.append(
-                Finding(
-                    "error",
-                    "RL-003",
-                    f"决策枚举不一致（{rel}）：真源={codes} 对端={other_codes}",
-                )
-            )
-            continue
-
-        mismatch = [
-            f"{code}: 真源={score} 对端={other_scores.get(code)}"
-            for code, score in scores.items()
-            if other_scores and code in other_scores and other_scores.get(code) != score
-        ]
-        if other_scores and not mismatch and set(other_scores) - set(codes):
-            extra = sorted(set(other_scores) - set(codes))
-            mismatch.append(f"对端多出决策: {', '.join(extra)}")
-        if mismatch:
-            findings.append(
-                Finding("error", "RL-003", f"{rel} 决策分值不一致 —— " + "；".join(mismatch))
-            )
-
-    # 部分执行也必须说清楚：比了几个、几个没比。
-    # 只在"全缺席"时报会漏掉最常见的情形——单仓 CI 里生成物在、实现仓不在。
-    if absent:
-        findings.append(
-            Finding(
-                "info",
-                "S003",
-                f"RL-003 有 {len(absent)} 个对端不在工作区，未比对: {', '.join(absent)}"
-                f"（已比对 {checked} 个）",
-            )
-        )
     return findings
 
 
@@ -355,7 +225,7 @@ CAPABILITY_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$")
 
 
 def check_capability_naming(concepts: dict[str, list[dict[str, Any]]]) -> list[Finding]:
-    """E114 能力名必须点分小写（如 patrol.dispatch，而非 Patrol_Dispatch）。
+    """E114 能力名必须点分小写（如 iam.auth，而非 Iam_Auth）。
 
     为什么在 Python 轨而不在 SHACL：TBox 迁到 TTL 后，能力名就是实例 IRI 的
     local name，不再有 rcp:name 字面值可挂 sh:pattern。留在 SHACL 里的结果是一个
@@ -369,7 +239,7 @@ def check_capability_naming(concepts: dict[str, list[dict[str, Any]]]) -> list[F
                 Finding(
                     "error",
                     "E114",
-                    f"能力名 {name!r} 不符合点分小写规范（例：patrol.dispatch）",
+                    f"能力名 {name!r} 不符合点分小写规范（例：iam.auth）",
                 )
             )
     return findings
@@ -746,15 +616,6 @@ def check_repo_registration(
     return findings
 
 
-def _spec_by_id(redlines: dict[str, Any], redline_id: str) -> dict[str, Any] | None:
-    """取某条红线在 policy/redlines.ttl 里声明的 spec（供跨源比对等专用执行器使用）。"""
-    for constraint in redlines.get("constraints", []):
-        if constraint.get("id") == redline_id:
-            spec = constraint.get("spec")
-            return spec if isinstance(spec, dict) else None
-    return None
-
-
 def check_shacl(
     registry: dict[str, Any],
     concepts: dict[str, list[dict[str, Any]]],
@@ -876,10 +737,10 @@ def check_declarations(
     这些检查只依赖声明文件，任何单仓环境都能复算，是架构熵基线对比的范围。
 
     两轨分工：
-      - checks.py 保留：本体头（E119）、键存在性（E001）、唯一键（E002）、跨源比对（RL-003）、
+      - checks.py 保留：本体头（E119）、键存在性（E001）、唯一键（E002）、
         契约文件存在（RL-006）、能力命名（E114）、能力归属（E111/E112）、
         expected 形状（E115）、图连通性（E108/E109/E110/W306）、红线元检查（E301/E302）。
-      - SHACL 迁移：依赖登记（E105）、依赖白名单（E106/RL-001）、external 方向
+      - SHACL 迁移：依赖登记（E105）、依赖白名单（E106）、external 方向
         （RL-002）、种类/能力声明（E201/E202）、TBox 自洽（E113）、
         挂契约（RL-006 的 minCount 部分）。
     """
@@ -895,7 +756,6 @@ def check_declarations(
     findings += check_relations(registry, relations, concepts)
     findings += check_registry_shape(registry)
     findings += check_expected_state(registry)
-    findings += check_decision_alignment(concepts, _spec_by_id(redlines, "RL-003"), scope_root)
     findings += check_contracts_exist(contracts_root, registry, concepts)
     findings += check_capability_naming(concepts)
     findings += check_capability_ownership(registry, concepts)

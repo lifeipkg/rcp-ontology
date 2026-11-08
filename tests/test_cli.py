@@ -12,7 +12,7 @@ TBOX = """@prefix rcp:  <https://risk-control.platform/ontology#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-rcp:PatrolLine a owl:Class, rcp:Kind ;
+rcp:Worker a owl:Class, rcp:Kind ;
     rdfs:subClassOf rcp:Service ;
     rdfs:label "巡查线" ;
     rcp:mustBeExternal false ; rcp:isEntry false ;
@@ -29,7 +29,7 @@ rcp:platform a rcp:Platform ;
 """
 
 ABOX_SERVICES = """@prefix rcp: <https://risk-control.platform/ontology#> .
-rcp:ghost a rcp:PatrolLine, rcp:Service ;
+rcp:ghost a rcp:Worker, rcp:Service ;
     rcp:repo "rcp-ghost" ; rcp:port 8099 ;
     rcp:external false ; rcp:owner "platform" ;
     rcp:hasCapability rcp:patrol.ghost .
@@ -74,17 +74,6 @@ def test_check_without_contracts_reports_skip(tmp_path: Path, capsys):
     main(["check", "--ontology", str(ontology), "-w", str(tmp_path)])
     out = capsys.readouterr().out
     assert "S004" in out
-
-
-def test_render_schema_is_reproducible(tmp_path: Path):
-    """生成物只随真源变化：同一份 decisions.ttl 必须产出逐字节相同的 YAML。"""
-    ontology = _minimal_ontology(tmp_path)
-    target = tmp_path / "decision.yaml"
-    assert main(["render-schema", "--ontology", str(ontology), "--out", str(target)]) == 0
-    first = target.read_text(encoding="utf-8")
-    assert main(["render-schema", "--ontology", str(ontology), "--out", str(target)]) == 0
-    assert target.read_text(encoding="utf-8") == first
-    assert "INTERCEPT" in first and "x-base-score" in first
 
 
 def test_impact_reports_unknown_service(tmp_path: Path, capsys):
