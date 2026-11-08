@@ -44,6 +44,6 @@ rcp:platform
         rcp:namespace "risk-control" ;
         rcp:discoveryGroup "DEFAULT_GROUP" ;
         rcp:fallback "k8s-dns" ;
-        rcp:note "接线分两种形态：5 个 Java 服务（api-gateway 与四条巡查线）引入 nacos-discovery 依赖并按占位符注册，网关经 DiscoveryClient 按服务名解析（多实例轮转），endpoints 仅作兜底；3 个 Go 服务（iam/dataway/db-ops）不注册 Nacos，按部署侧 Service 名经 DNS 解析（fallback 即 k8s-dns）。两种形态都满足 RL-007：清单中不出现上游地址。网关对 IAM 的调用是逐请求内省（iam.auth 的唯一判定点），IAM 不可用时鉴权 fail closed。本平台为 demo 定位，未做运行时标定，行为验证以各仓单测（mvn test / go test）与寻址单测为准，见 rcp-contracts/docs/DISCOVERY.md。" ;
+        rcp:note "接线分两种形态：4 个 Java 服务（四条巡查线）引入 nacos-discovery 依赖并按占位符注册；4 个 Go 服务（api-gateway/iam/dataway/db-ops）不注册 Nacos，按部署侧 Service 名经 DNS 解析（fallback 即 k8s-dns），网关对巡查线也不再经注册中心寻址。两种形态都满足 RL-007：清单中不出现上游地址。网关对 IAM 的调用是逐请求内省（iam.auth 的唯一判定点），IAM 不可用时鉴权 fail closed。本平台为 demo 定位，未做运行时标定，行为验证以各仓单测（mvn test / go test）为准，见 rcp-contracts/docs/DISCOVERY.md。" ;
         rdfs:comment "服务发现的形态与进度。state=wired 表示 Java 侧运行时代码已按服务名解析；Go 侧走 k8s-dns，不注册 Nacos。" ;
     ] .
