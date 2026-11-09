@@ -38,3 +38,21 @@ rcp:meta_repo a rcp:Term ;
     rcp:definition "不参与运行时数据面的仓：契约声明、本体检查工具、迁移与部署清单。无端口、不部署、不挂 OpenAPI，但必须有 owner 与登记。" ;
     rcp:owner "platform" ;
     rcp:covers rcp:Meta .
+
+# ── 多租户与授权 ────────────────────────────────────────────────────────────
+# 这三个术语不是服务种类，故不写 rcp:covers（covers 的 range 是 rcp:Kind）。
+
+rcp:tenant a rcp:Term ;
+    rdfs:label "租户" ;
+    rcp:definition "数据与权限的隔离边界。用户名在租户内唯一，跨租户不共享账号与角色。" ;
+    rcp:owner "rcp-iam" .
+
+rcp:role a rcp:Term ;
+    rdfs:label "角色" ;
+    rcp:definition "租户内的一组权限码绑定；内置 ADMIN / OPERATOR / VIEWER，租户可自定义角色。" ;
+    rcp:owner "rcp-iam" .
+
+rcp:permission a rcp:Term ;
+    rdfs:label "权限码" ;
+    rcp:definition "平台预置的「域:动作」授权词（如 iam:users）。角色通过绑定权限码获得授权，网关按内省返回的权限判定。" ;
+    rcp:owner "rcp-iam" .

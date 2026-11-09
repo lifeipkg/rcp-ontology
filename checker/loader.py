@@ -28,7 +28,7 @@ from typing import Any
 
 from rdflib import DCTERMS, OWL, RDF, RDFS, Graph
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 # 各层的目录名（相对本体仓根的 ontology/）。
 ONTOLOGY_DIR = "ontology"

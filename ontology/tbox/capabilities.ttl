@@ -21,6 +21,23 @@ rcp:iam.users a rcp:Capability ;
     rcp:definition "用户生命周期与角色授予（ADMIN / OPERATOR / VIEWER），含最后一个管理员保护。" ;
     rcp:implementedBy rcp:iam .
 
+# 多租户化后从 iam.users 拆出的三项：租户边界、角色与授权、权限码目录各由一条能力承载，
+# 便于按能力反查负责方与影响面。
+rcp:iam.tenants a rcp:Capability ;
+    rdfs:label "租户管理" ;
+    rcp:definition "租户的开通、停用与查询；租户本身即隔离边界，本能力不提供跨租户用户数据。" ;
+    rcp:implementedBy rcp:iam .
+
+rcp:iam.roles a rcp:Capability ;
+    rdfs:label "角色与授权" ;
+    rcp:definition "租户内角色定义、权限码绑定与用户角色授予；角色→权限的展开只在本服务内。" ;
+    rcp:implementedBy rcp:iam .
+
+rcp:iam.permissions a rcp:Capability ;
+    rdfs:label "权限码目录" ;
+    rcp:definition "平台预置权限码的只读目录，供角色编辑与前端可见性判断使用。" ;
+    rcp:implementedBy rcp:iam .
+
 rcp:data.query a rcp:Capability ;
     rdfs:label "声明式查询" ;
     rcp:definition "只读查询，限 SELECT 且限白名单表。" ;

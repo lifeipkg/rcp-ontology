@@ -32,8 +32,8 @@
 <https://risk-control.platform/ontology>
     a owl:Ontology ;
     rdfs:label "平台本体" ;
-    owl:versionInfo "3.0.0" ;
-    owl:versionIRI <https://risk-control.platform/ontology/3.0.0> ;
+    owl:versionInfo "3.1.0" ;
+    owl:versionIRI <https://risk-control.platform/ontology/3.1.0> ;
     dcterms:hasPart
         "tbox/schema.ttl" ,
         "tbox/kinds.ttl" ,
@@ -84,6 +84,17 @@ rcp:Kind        a owl:Class ; rdfs:label "种类" ;
 
 rcp:Capability  a owl:Class ; rdfs:label "能力" ;
                 rdfs:comment "可被服务或库实现的功能单元，owner 由 rcp:implementedBy 唯一确定。" .
+
+# 租户与授权：运行时数据的形状，不是登记实例。三者都是 IAM 的领域概念，
+# 不构成服务种类（rcp:Kind），因此不进 kinds.ttl、也不挂 allowsDependsOn。
+rcp:Tenant      a owl:Class ; rdfs:label "租户" ;
+                rdfs:comment "数据与权限的隔离边界。用户、会话、角色均归属单一租户，跨租户不共享账号。" .
+
+rcp:Role        a owl:Class ; rdfs:label "角色" ;
+                rdfs:comment "租户内的一组权限绑定名。内置 ADMIN / OPERATOR / VIEWER 由平台预置，租户可自定义角色。" .
+
+rcp:Permission  a owl:Class ; rdfs:label "权限码" ;
+                rdfs:comment "平台预置的「域:动作」授权词（如 iam:users）。租户只能把权限码组进角色，不能自建权限码。" .
 
 rcp:Term        a owl:Class ; rdfs:label "术语" ;
                 rdfs:comment "业务叫法与概念的对应关系。立名先于实现。" .
