@@ -69,9 +69,9 @@ def test_real_tbox_loads_three_layers():
     concepts = load_concepts(ROOT)
     # 6 kinds：gateway / data-gateway / db-ops / iam / frontend / meta
     assert len(concepts["kinds"]) == 6
-    # 7 项能力：iam.auth / iam.users / data.query / data.execute /
-    #           schema.migrate / schema.version / ops.console
-    assert len(concepts["capabilities"]) == 7
+    # 10 项能力：iam.auth / iam.users / iam.tenants / iam.roles / iam.permissions /
+    #            data.query / data.execute / schema.migrate / schema.version / ops.console
+    assert len(concepts["capabilities"]) == 10
 
 
 def test_dict_view_matches_tbox_graph():

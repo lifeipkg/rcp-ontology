@@ -81,7 +81,8 @@ rcp:iam
     rcp:external false ;
     rcp:owner "platform" ;
     rcp:health "/actuator/health" ;
-    rcp:hasCapability rcp:iam.auth, rcp:iam.users ;
+    rcp:hasCapability rcp:iam.auth, rcp:iam.users, rcp:iam.tenants, rcp:iam.roles,
+        rcp:iam.permissions ;
     rcp:calls rcp:dataway ;
     rcp:queries rcp:dataway ;
     rcp:writes rcp:dataway ;
