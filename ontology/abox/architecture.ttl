@@ -1,0 +1,186 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 架构层实例（ABox）：归属、交付资产、数据资产、运行面。
+#
+# 与 services.ttl 的分工：本文件只登记「非服务实体」——团队、契约、表、存储、
+# 工作负载、命名空间、环境、信任边界、流水线、门禁。服务自身的边（owned_by /
+# in_boundary / lifecycle / deployed_as）仍写在 services.ttl，因为"服务的边只在
+# 一处声明"这条约定优先于"按层分文件"。
+#
+# 三条书写约定：
+#   1. 本文件的实例一律**不写 rcp:repo**。装载器把带 repo 的节点当服务/库并要求
+#      kind，写上去会让表格、契约被误判成服务。
+#   2. 每个实例必须能在仓内指到出处（rcp:path 或迁移目录），不登记推测对象。
+#   3. 无实例的类不在此硬凑：rcp:Adr 与 rcp:QualityAttribute 只立名，等真实决策
+#      与指标落地后回填，见文件末尾说明。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 团队 ────────────────────────────────────────────────────────────────────
+# owner 字面量（"platform"）的实体化。现役 5 个服务与 3 个元仓的 owner 均为 platform。
+
+rcp:team-platform a rcp:Team ;
+    rdfs:label "平台团队" ;
+    rcp:owner "platform" ;
+    rcp:definition "承担网关、IAM、数据网关、db-ops 与全部元仓的 owner。CODEOWNERS 由本节点派生。" .
+
+# ── 运行环境与命名空间 ──────────────────────────────────────────────────────
+
+rcp:env-local a rcp:Environment ;
+    rdfs:label "本地环境" ;
+    rcp:path "rcp-ops/docker-compose.yml" ;
+    rcp:owner "platform" ;
+    rcp:definition "docker compose 起的单机环境，用于本地联调；凭据来自 .env 而非 Secret。" .
+
+rcp:env-prod a rcp:Environment ;
+    rdfs:label "生产环境" ;
+    rcp:path "rcp-ops/k8s/" ;
+    rcp:owner "platform" ;
+    rcp:definition "K8s 清单定义的环境。本仓无真实集群，清单只作形态，不声称已部署。" .
+
+rcp:ns-risk-control a rcp:Namespace ;
+    rdfs:label "risk-control 命名空间" ;
+    rcp:path "rcp-ops/k8s/00-namespace.yaml" ;
+    rcp:owner "platform" ;
+    rcp:definition "全部工作负载的落点。服务名解析（k8s-dns）的作用域。" .
+
+# ── 工作负载 ────────────────────────────────────────────────────────────────
+# 与 k8s 清单逐一对表：每个 Deployment 名即 local name。
+
+rcp:workload-api-gateway a rcp:Workload ;
+    rdfs:label "api-gateway 工作负载" ;
+    rcp:path "rcp-ops/k8s/10-api-gateway.yaml" ;
+    rcp:owner "platform" ;
+    rcp:deployed_to rcp:env-prod ;
+    rcp:in_namespace rcp:ns-risk-control .
+
+rcp:workload-dataway a rcp:Workload ;
+    rdfs:label "dataway 工作负载" ;
+    rcp:path "rcp-ops/k8s/15-dataway.yaml" ;
+    rcp:owner "platform" ;
+    rcp:deployed_to rcp:env-prod ;
+    rcp:in_namespace rcp:ns-risk-control .
+
+rcp:workload-db-ops a rcp:Workload ;
+    rdfs:label "db-ops 工作负载" ;
+    rcp:path "rcp-ops/k8s/16-db-ops.yaml" ;
+    rcp:owner "platform" ;
+    rcp:deployed_to rcp:env-prod ;
+    rcp:in_namespace rcp:ns-risk-control .
+
+rcp:workload-iam a rcp:Workload ;
+    rdfs:label "iam 工作负载" ;
+    rcp:path "rcp-ops/k8s/17-iam.yaml" ;
+    rcp:owner "platform" ;
+    rcp:deployed_to rcp:env-prod ;
+    rcp:in_namespace rcp:ns-risk-control .
+
+rcp:workload-web a rcp:Workload ;
+    rdfs:label "web 工作负载" ;
+    rcp:path "rcp-ops/k8s/20-web.yaml" ;
+    rcp:owner "platform" ;
+    rcp:deployed_to rcp:env-prod ;
+    rcp:in_namespace rcp:ns-risk-control .
+
+# ── 数据存储与表 ────────────────────────────────────────────────────────────
+# 表只登记存在性与归属，不复制列定义：DDL 真源是 rcp-ops/migrations。
+
+rcp:store-postgres a rcp:Datastore ;
+    rdfs:label "PostgreSQL 16" ;
+    rcp:vendor "postgres" ;
+    rcp:version "16" ;
+    rcp:path "rcp-ops/docker-compose.yml" ;
+    rcp:owner "platform" ;
+    rcp:definition "平台唯一的关系型存储。只有 dataway 与 db-ops 持有驱动（RL-005）。" .
+
+rcp:table-iam-users a rcp:Table ;
+    rdfs:label "iam_users" ;
+    rcp:path "rcp-ops/migrations/V1.4.0__iam_store.sql" ;
+    rcp:owner "platform" ;
+    rcp:hosted_on rcp:store-postgres ;
+    rcp:definition "用户主表。读方 iam（经 dataway），写方 iam（经 dataway）。" .
+
+rcp:table-iam-sessions a rcp:Table ;
+    rdfs:label "iam_sessions" ;
+    rcp:path "rcp-ops/migrations/V1.4.0__iam_store.sql" ;
+    rcp:owner "platform" ;
+    rcp:hosted_on rcp:store-postgres ;
+    rcp:definition "会话表。带 user_id 与 expires_at 索引，过期清理由 iam 触发。" .
+
+# ── 契约资产 ────────────────────────────────────────────────────────────────
+# 版本取自文件 info.version；文件真源在 rcp-contracts，本处只登记归属与生命周期。
+
+rcp:contract-api-gateway a rcp:Contract ;
+    rdfs:label "api-gateway OpenAPI" ;
+    rcp:path "rcp-contracts/contracts/openapi/api-gateway.yaml" ;
+    rcp:version "2.0.0" ;
+    rcp:owner "platform" ;
+    rcp:lifecycle rcp:state-active .
+
+rcp:contract-dataway a rcp:Contract ;
+    rdfs:label "dataway OpenAPI" ;
+    rcp:path "rcp-contracts/contracts/openapi/dataway.yaml" ;
+    rcp:version "1.0.0" ;
+    rcp:owner "platform" ;
+    rcp:lifecycle rcp:state-active .
+
+rcp:contract-db-ops a rcp:Contract ;
+    rdfs:label "db-ops OpenAPI" ;
+    rcp:path "rcp-contracts/contracts/openapi/db-ops.yaml" ;
+    rcp:version "1.0.0" ;
+    rcp:owner "platform" ;
+    rcp:lifecycle rcp:state-active .
+
+rcp:contract-iam a rcp:Contract ;
+    rdfs:label "iam OpenAPI" ;
+    rcp:path "rcp-contracts/contracts/openapi/iam.yaml" ;
+    rcp:version "1.0.0" ;
+    rcp:owner "platform" ;
+    rcp:lifecycle rcp:state-active .
+
+# ── 交付：流水线与门禁 ──────────────────────────────────────────────────────
+# 门禁只登记 ci.yml 里真实存在的步骤名，不推测"应该有"的检查。
+
+rcp:pipeline-rcp-ops a rcp:Pipeline ;
+    rdfs:label "rcp-ops CI" ;
+    rcp:path "rcp-ops/.github/workflows/ci.yml" ;
+    rcp:owner "platform" ;
+    rcp:includes rcp:gate-migration-pair, rcp:gate-manifest-parse ;
+    rcp:definition "部署与迁移仓的 CI。当前不包含 ontology check：本仓 check 尚无执行通道。" .
+
+rcp:gate-migration-pair a rcp:Gate ;
+    rdfs:label "迁移版本配对" ;
+    rcp:job "check" ;
+    rcp:owner "platform" ;
+    rcp:path "rcp-ops/.github/workflows/ci.yml" ;
+    rcp:definition "运行 tools/check_migrations.py，校验 V/U 版本配对。" .
+
+rcp:gate-manifest-parse a rcp:Gate ;
+    rdfs:label "清单可解析" ;
+    rcp:job "check" ;
+    rcp:owner "platform" ;
+    rcp:path "rcp-ops/.github/workflows/ci.yml" ;
+    rcp:definition "遍历 yaml 并解析，捕获清单语法错误。" .
+
+# ── 信任边界 ────────────────────────────────────────────────────────────────
+# 边界判据来自 external 字段（RL-002）：external=true 的是边缘，其余在内部。
+
+rcp:boundary-edge a rcp:TrustBoundary ;
+    rdfs:label "边缘边界" ;
+    rcp:owner "platform" ;
+    rcp:definition "可被工作区外部直接访问的一侧。只有 gateway 与 frontend 在此（RL-002）。" .
+
+rcp:boundary-internal a rcp:TrustBoundary ;
+    rdfs:label "内部边界" ;
+    rcp:owner "platform" ;
+    rcp:definition "只允许集群内互调的一侧。跨越本边界进入的调用必须经网关注入身份。" .
+
+# ── 未落地的类（有意留空）──────────────────────────────────────────────────
+# rcp:Adr 与 rcp:QualityAttribute 已立名但无实例：
+#   现有 5 条红线的决策出处（时间、决策人、当时被否的方案）不在仓内留存，
+#   补 ADR 需要回填真实记录，不能从 rationale 反推成"决策"。
+#   质量属性同理：本平台为 demo 定位、未做运行时标定（见 platform.ttl 的 note），
+#   写任何延迟或可用性目标都会变成不可验证的承诺。
+# 两者的承接方式：真实决策与指标落地时，在此文件补实例，不改 TBox。

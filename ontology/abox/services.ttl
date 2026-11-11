@@ -31,7 +31,11 @@ rcp:api-gateway
     rcp:owner "platform" ;
     rcp:health "/actuator/health" ;
     rcp:calls rcp:iam ;
-    rcp:contract "contracts/openapi/api-gateway.yaml" .
+    rcp:contract "contracts/openapi/api-gateway.yaml" ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:in_boundary rcp:boundary-edge ;
+    rcp:lifecycle rcp:state-active ;
+    rcp:deployed_as rcp:workload-api-gateway .
 
 # 元仓：不参与运行时数据面，无端口、不部署、不挂 OpenAPI。
 # 登记它们的目的是让 owner 与仓边界有唯一出处，否则 E107 无法区分
@@ -40,7 +44,9 @@ rcp:contracts
     a rcp:Meta ;
     rcp:repo "rcp-contracts" ;
     rcp:external false ;
-    rcp:owner "platform" .
+    rcp:owner "platform" ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:lifecycle rcp:state-active .
 
 # 数据面已启用：iam 经本服务读写 iam_users / iam_sessions（RL-005），
 # 故不再声明「预期无下游 / 不可达」。
@@ -52,7 +58,11 @@ rcp:dataway
     rcp:owner "platform" ;
     rcp:health "/actuator/health" ;
     rcp:hasCapability rcp:data.execute, rcp:data.query ;
-    rcp:contract "contracts/openapi/dataway.yaml" .
+    rcp:contract "contracts/openapi/dataway.yaml" ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:in_boundary rcp:boundary-internal ;
+    rcp:lifecycle rcp:state-active ;
+    rcp:deployed_as rcp:workload-dataway .
 
 rcp:db-ops
     a rcp:DbOps, rcp:Service ;
@@ -63,6 +73,10 @@ rcp:db-ops
     rcp:health "/actuator/health" ;
     rcp:hasCapability rcp:schema.migrate, rcp:schema.version ;
     rcp:contract "contracts/openapi/db-ops.yaml" ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:in_boundary rcp:boundary-internal ;
+    rcp:lifecycle rcp:state-active ;
+    rcp:deployed_as rcp:workload-db-ops ;
     # 迁移执行器暂由平台侧手动/脚本调用，尚未有运行时服务依赖它。
     rcp:expected [
         rcp:noDependents true ;
@@ -86,19 +100,30 @@ rcp:iam
     rcp:calls rcp:dataway ;
     rcp:queries rcp:dataway ;
     rcp:writes rcp:dataway ;
-    rcp:contract "contracts/openapi/iam.yaml" .
+    rcp:contract "contracts/openapi/iam.yaml" ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:in_boundary rcp:boundary-internal ;
+    rcp:lifecycle rcp:state-active ;
+    rcp:deployed_as rcp:workload-iam ;
+    # 表级血缘：读写都经 dataway，不改 RL-005 的判定（本仓不持驱动）。
+    rcp:reads_table rcp:table-iam-users, rcp:table-iam-sessions ;
+    rcp:writes_table rcp:table-iam-users, rcp:table-iam-sessions .
 
 rcp:ontology
     a rcp:Meta ;
     rcp:repo "rcp-ontology" ;
     rcp:external false ;
-    rcp:owner "platform" .
+    rcp:owner "platform" ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:lifecycle rcp:state-active .
 
 rcp:ops
     a rcp:Meta ;
     rcp:repo "rcp-ops" ;
     rcp:external false ;
-    rcp:owner "platform" .
+    rcp:owner "platform" ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:lifecycle rcp:state-active .
 
 rcp:web
     a rcp:Frontend, rcp:Service ;
@@ -108,4 +133,8 @@ rcp:web
     rcp:owner "platform" ;
     rcp:health "/" ;
     rcp:hasCapability rcp:ops.console ;
-    rcp:calls rcp:api-gateway .
+    rcp:calls rcp:api-gateway ;
+    rcp:owned_by rcp:team-platform ;
+    rcp:in_boundary rcp:boundary-edge ;
+    rcp:lifecycle rcp:state-active ;
+    rcp:deployed_as rcp:workload-web .

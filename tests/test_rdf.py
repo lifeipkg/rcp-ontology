@@ -151,3 +151,69 @@ def test_shacl_catches_dependency_kind_violation():
     conforms, findings = validate_all(g, ONTOLOGY_DIR / "shapes" / "core.ttl", CONCEPTS)
     assert conforms is False
     assert any(f.code == "E106" for f in findings)
+
+
+def test_architecture_instances_reach_exported_graph():
+    """架构层实例必须进导出图，否则 E210–E213 是空转形状。
+
+    这些实例不在 services/libraries 字典里，只能由 exporter 从 abox 原图并入。
+    去掉并入逻辑会让四条形状全部静默通过 —— 这正是本测试要拦的回归。
+    """
+    from checker import loader
+
+    registry = loader.load_registry(ROOT)
+    concepts = loader.load_concepts(ROOT)
+    g = build_rdf(registry, concepts, loader.load_relations(ROOT))
+
+    assert (RCP["workload-web"], RCP["deployed_to"], RCP["env-prod"]) in g
+    assert (RCP["table-iam-users"], RCP["hosted_on"], RCP["store-postgres"]) in g
+    assert (RCP["contract-iam"], RDF.type, RCP.Contract) in g
+    assert (RCP["team-platform"], RDF.type, RCP.Team) in g
+
+
+def test_shacl_catches_broken_architecture_asset():
+    """负例：契约缺 version 时 E211 必须命中（形状不是装饰）。"""
+    from checker import loader
+
+    registry = loader.load_registry(ROOT)
+    concepts = loader.load_concepts(ROOT)
+    g = build_rdf(registry, concepts, loader.load_relations(ROOT))
+    contract = RCP["contract-iam"]
+    g.remove((contract, RCP.version, None))
+
+    conforms, findings = validate_all(g, ONTOLOGY_DIR / "shapes" / "core.ttl", concepts)
+    assert conforms is False
+    assert any(f.code == "E211" and f.focus and "contract-iam" in f.focus for f in findings)
+
+
+def test_architecture_instances_reach_exported_graph():
+    """架构层实例必须进导出图，否则 E210–E213 是空转形状。
+
+    这些实例不在 services/libraries 字典里，只能由 exporter 从 abox 原图并入。
+    去掉并入逻辑会让四条形状全部静默通过 —— 这正是本测试要拦的回归。
+    """
+    from checker import loader
+
+    registry = loader.load_registry(ROOT)
+    concepts = loader.load_concepts(ROOT)
+    g = build_rdf(registry, concepts, loader.load_relations(ROOT))
+
+    assert (RCP["workload-web"], RCP["deployed_to"], RCP["env-prod"]) in g
+    assert (RCP["table-iam-users"], RCP["hosted_on"], RCP["store-postgres"]) in g
+    assert (RCP["contract-iam"], RDF.type, RCP.Contract) in g
+    assert (RCP["team-platform"], RDF.type, RCP.Team) in g
+
+
+def test_shacl_catches_broken_architecture_asset():
+    """负例：契约缺 version 时 E211 必须命中（形状不是装饰）。"""
+    from checker import loader
+
+    registry = loader.load_registry(ROOT)
+    concepts = loader.load_concepts(ROOT)
+    g = build_rdf(registry, concepts, loader.load_relations(ROOT))
+    contract = RCP["contract-iam"]
+    g.remove((contract, RCP.version, None))
+
+    conforms, findings = validate_all(g, ONTOLOGY_DIR / "shapes" / "core.ttl", concepts)
+    assert conforms is False
+    assert any(f.code == "E211" and f.focus and "contract-iam" in f.focus for f in findings)
