@@ -9,7 +9,7 @@
 # 端点种类约束无法从任何 key: value 推导，只能显式写成语义三元组。关系实例
 # （谁 calls 谁）在 abox/services.ttl，那是可评审的事实。
 #
-# 六张分域图的意义：环检测与可达性只在 rcp:reachability true 的图上计算。把部署、
+# 七张分域图的意义：环检测与可达性只在 rcp:reachability true 的图上计算。把部署、
 # 数据血缘、构建依赖混进调用图，E108/E109/E110 会立刻误报 —— 这是分域的唯一目的。
 #
 # 新增一条关系只改本文件：加一条 rcp:RelationKind、写 graph 与 status，参与可达性
@@ -53,6 +53,12 @@ rcp:GovernanceGraph a rcp:RelationGraph ;
     rdfs:label "治理图" ;
     rcp:reachability false ;
     rdfs:comment "归属、红线约束与例外声明。who 的问题，不是 can-reach 的问题。" .
+
+rcp:DeliveryGraph a rcp:RelationGraph ;
+    rcp:name "delivery" ;
+    rdfs:label "交付图" ;
+    rcp:reachability false ;
+    rdfs:comment "流水线、门禁作业与它们保障的红线。不参与可达性：交付链断不构成运行时可达性变化。" .
 
 # ---- 调用图：唯一参与可达性的图 ----
 # 这几条一律 rdfs:subPropertyOf rcp:dependsOn：导出器会为它们同时产出 dependsOn
@@ -106,14 +112,16 @@ rcp:reads_table a rcp:RelationKind, owl:ObjectProperty ;
     rcp:graph rcp:DataGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "表级血缘：读哪张表。目标是词汇对象不是登记实体，故不设 targetKind。" .
+    rcp:targetKind rcp:Table ;
+    rdfs:comment "表级血缘：读哪张表。端点是 abox/architecture.ttl 登记的表实体；改表前据此反查读者。" .
 
 rcp:writes_table a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "writes_table" ;
     rcp:graph rcp:DataGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "表级血缘：写哪张表。改表结构前据此反查影响面。" .
+    rcp:targetKind rcp:Table ;
+    rdfs:comment "表级血缘：写哪张表。端点是已登记的表实体；改表结构前据此反查影响面。" .
 
 rcp:migrates a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "migrates" ;
@@ -122,6 +130,14 @@ rcp:migrates a rcp:RelationKind, owl:ObjectProperty ;
     rdfs:domain rcp:Service ;
     rdfs:comment "执行某仓的版本化 DDL。RL-004 的落位判据，执行者唯一。" .
 
+rcp:hosted_on a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "hosted_on" ;
+    rcp:graph rcp:DataGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Table ;
+    rcp:targetKind rcp:Datastore ;
+    rdfs:comment "表挂在哪个数据库实例上。存储升级/迁移据此反查受影响的表。" .
+
 # ---- 契约图 ----
 
 rcp:exposes a rcp:RelationKind, owl:ObjectProperty ;
@@ -129,7 +145,8 @@ rcp:exposes a rcp:RelationKind, owl:ObjectProperty ;
     rcp:graph rcp:ContractGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "对外暴露某份 OpenAPI 契约。等价于登记里的 rcp:contract 字段。" .
+    rcp:targetKind rcp:Contract ;
+    rdfs:comment "对外暴露某份契约。端点是 abox 登记的契约资产，与 rcp:contract 路径字段指同一份文件。" .
 
 rcp:consumes a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "consumes" ;
@@ -161,7 +178,8 @@ rcp:deployed_as a rcp:RelationKind, owl:ObjectProperty ;
     rcp:graph rcp:DeployGraph ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
-    rdfs:comment "服务对应的 K8s workload 名。清单与登记的对应关系。" .
+    rcp:targetKind rcp:Workload ;
+    rdfs:comment "服务对应的 K8s workload。清单与登记的对应关系，端点是 abox 登记的工作负载实体。" .
 
 rcp:routes_to a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "routes_to" ;
@@ -170,14 +188,51 @@ rcp:routes_to a rcp:RelationKind, owl:ObjectProperty ;
     rdfs:domain rcp:Service ;
     rdfs:comment "网关路由到某服务。配置事实：有路由不等于有人调用，故不进影响面。" .
 
+# ── 运行面与交付：环境、命名空间、流水线门禁 ──────────────────────────────────
+
+rcp:deployed_to a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "deployed_to" ;
+    rcp:graph rcp:DeployGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Workload ;
+    rcp:targetKind rcp:Environment ;
+    rdfs:comment "工作负载所属环境。回答「这个部署单元在本地还是生产」。" .
+
+rcp:in_namespace a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "in_namespace" ;
+    rcp:graph rcp:DeployGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Workload ;
+    rcp:targetKind rcp:Namespace ;
+    rdfs:comment "工作负载所在命名空间。服务名解析的作用域，也是跨命名空间访问的判据。" .
+
+rcp:includes a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "includes" ;
+    rcp:graph rcp:DeliveryGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Pipeline ;
+    rcp:targetKind rcp:Gate ;
+    rdfs:comment "流水线包含哪些门禁作业。" .
+
+rcp:enforces a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "enforces" ;
+    rcp:graph rcp:DeliveryGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Gate ;
+    rcp:targetKind rcp:Redline ;
+    rdfs:comment "门禁作业保障哪条红线。没有 enforces 边的红线即「只有声明、没有执行通道」。" .
+
 # ---- 治理图 ----
 
 rcp:owned_by a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "owned_by" ;
     rcp:graph rcp:GovernanceGraph ;
     rcp:status "declared" ;
-    rdfs:domain rcp:Service ;
-    rdfs:comment "归属团队。CODEOWNERS 的派生来源。" .
+    # domain 为 owl:Thing 而非 rcp:Service：元仓（rcp:Meta）同样需要归属，
+    # 但它不挂 rcp:Service，写 Service 会让这条边在元仓上是无声的越域声明。
+    rdfs:domain owl:Thing ;
+    rcp:targetKind rcp:Team ;
+    rdfs:comment "归属团队。端点是 abox 登记的团队实体，CODEOWNERS 的派生来源。" .
 
 rcp:governed_by a rcp:RelationKind, owl:ObjectProperty ;
     rcp:name "governed_by" ;
@@ -192,3 +247,45 @@ rcp:waived_by a rcp:RelationKind, owl:ObjectProperty ;
     rcp:status "declared" ;
     rdfs:domain rcp:Service ;
     rdfs:comment "例外声明（expected / RL-007 例外）。必须带 reason、owner、reviewBy。" .
+
+# ── 架构层治理：边界、生命周期、决策 ────────────────────────────────────────
+
+rcp:in_boundary a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "in_boundary" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rcp:targetKind rcp:TrustBoundary ;
+    rdfs:comment "服务所处信任边界。边界内互调与跨界调用的鉴权要求不同，RL-002 只覆盖后者的一半。" .
+
+rcp:lifecycle a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "lifecycle" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain owl:Thing ;
+    rcp:targetKind rcp:LifecycleState ;
+    rdfs:comment "资产的生命周期状态。retired 的资产不得再被 calls / routes_to / deployed_as 指向。" .
+
+rcp:decides_on a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "decides_on" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Adr ;
+    rcp:targetKind rcp:Redline ;
+    rdfs:comment "ADR 产生或维护哪条红线。使红线的 rationale 有可追溯出处，而不是只有一段散文。" .
+
+rcp:supersedes a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "supersedes" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Adr ;
+    rcp:targetKind rcp:Adr ;
+    rdfs:comment "新 ADR 取代旧 ADR。被取代的 ADR 引用的红线须复审，否则出现「依据已废而红线仍在」。" .
+
+rcp:promises a rcp:RelationKind, owl:ObjectProperty ;
+    rcp:name "promises" ;
+    rcp:graph rcp:GovernanceGraph ;
+    rcp:status "declared" ;
+    rdfs:domain rcp:Service ;
+    rcp:targetKind rcp:QualityAttribute ;
+    rdfs:comment "服务承诺的质量目标。沿 calls 图累加成端到端预算，是调用图除环检测外的第二种用途。" .

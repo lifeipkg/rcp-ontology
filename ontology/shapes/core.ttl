@@ -81,3 +81,61 @@ rcp:KindIntegrityShape a sh:NodeShape ;
 # TBox 迁到 TTL 后，能力名就是实例 IRI 的 local name，图上没有 rcp:name 字面值可挂
 # sh:pattern。留一个永远不命中的形状比没有检查更危险，故该判定移回 checks.py
 # （check_capability_naming），由字典视图上的正则承担。
+
+# ---- E210：架构资产必须有归属（团队） ----
+# 资产类不挂 rcp:Service，所以服务侧的 E001 owner 必填不覆盖它们。
+# LifecycleState 是词汇不是资产，不进 targetClass。
+rcp:ArchAssetOwnerShape a sh:NodeShape ;
+    sh:targetClass rcp:Team, rcp:Contract, rcp:Table, rcp:Datastore, rcp:Workload,
+                   rcp:Pipeline, rcp:Gate, rcp:Environment, rcp:Namespace, rcp:TrustBoundary,
+                   rcp:Component ;
+    sh:property [
+        sh:path rcp:owner ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "E210: 架构资产缺 owner，归属无法落到审批" ;
+    ] .
+
+# ---- E211：契约资产必须有路径与版本 ----
+# 路径是「与磁盘对表」的锚点，版本是「破坏性变更」判据的输入；缺任一项，
+# 契约在图上是不可核对的节点。
+rcp:ContractAssetShape a sh:NodeShape ;
+    sh:targetClass rcp:Contract ;
+    sh:property [
+        sh:path rcp:path ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "E211: 契约缺 path，无法与磁盘对表" ;
+    ] , [
+        sh:path rcp:version ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "E211: 契约缺 version，破坏性变更无从判定" ;
+    ] .
+
+# ---- E212：工作负载必须声明所属环境 ----
+# 没有环境的 workload 无法回答「这个部署单元在本地还是生产」，也就不该被登记。
+rcp:WorkloadPlacementShape a sh:NodeShape ;
+    sh:targetClass rcp:Workload ;
+    sh:property [
+        sh:path rcp:deployed_to ;
+        sh:minCount 1 ;
+        sh:class rcp:Environment ;
+        sh:message "E212: 工作负载未声明所属环境" ;
+    ] .
+
+# ---- E213：ADR 必须带决策与决策日期 ----
+# 空 ADR 只是标题，撑不起「红线的出处」。当前无实例，形状空转即正确行为。
+rcp:AdrShape a sh:NodeShape ;
+    sh:targetClass rcp:Adr ;
+    sh:property [
+        sh:path rcp:decision ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "E213: ADR 缺 decision 正文" ;
+    ] , [
+        sh:path rcp:decidedOn ;
+        sh:minCount 1 ;
+        sh:datatype xsd:date ;
+        sh:message "E213: ADR 缺 decidedOn 日期" ;
+    ] .

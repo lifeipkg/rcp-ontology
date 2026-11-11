@@ -1,0 +1,100 @@
+@prefix rcp:  <https://risk-control.platform/ontology#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 架构层概念：平台由哪些「生产要素」构成。
+#
+# 与 kinds.ttl 的边界：kind 描述服务的角色（网关 / 数据网关 / 元仓 …），本文件描述
+# 服务的生产要素（谁负责、挂哪份契约、读写哪张表、跑在哪个工作负载上）。
+# 判据：能被「改一次代码 / 删一个仓 / 换一次部署 / 退一次役」直接影响的非业务对象，
+# 且不是服务种类，就属于这里。
+#
+# 这些类一律不挂 rdfs:subClassOf rcp:Service（同 rcp:Meta 的理由）：它们不参与运行时
+# 数据面、无端口、不探活，挂上 Service 会被服务形状误判为「缺端口」。
+#
+# 复用既有执行器：本层所有判定都在 RegistryAssert / FileScan / RegistryScan 的能力内，
+# 不新增 spec.type，因此不需要新的检查执行器。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 组织与归属 ──────────────────────────────────────────────────────────────
+
+rcp:Team a owl:Class ;
+    rdfs:label "团队" ;
+    rdfs:comment "承担 owner 的组织单元。rcp:owner 字面量的实体化：治理图的归属节点，CODEOWNERS 的派生来源。" .
+
+# ── 交付资产 ────────────────────────────────────────────────────────────────
+
+rcp:Contract a owl:Class ;
+    rdfs:label "契约资产" ;
+    rdfs:comment "一份 OpenAPI 或消息 schema 文件。rcp:contract 路径的实体化，承载版本与消费方闭包；文件真源在 rcp-contracts。" .
+
+rcp:Pipeline a owl:Class ;
+    rdfs:label "交付流水线" ;
+    rdfs:comment "CI 工作流文件。回答「谁在什么时机跑检查」，是红线是否有执行通道的判据载体。" .
+
+rcp:Gate a owl:Class ;
+    rdfs:label "门禁作业" ;
+    rdfs:comment "流水线里的一个可判定步骤。rcp:enforces 指向它保障的红线；无 gate 的红线即纸面红线。" .
+
+# ── 数据资产 ────────────────────────────────────────────────────────────────
+
+rcp:Datastore a owl:Class ;
+    rdfs:label "数据存储" ;
+    rdfs:comment "数据库实例（PostgreSQL 等）。版本、备份与连接方式是架构事实，不是业务事实。" .
+
+rcp:Table a owl:Class ;
+    rdfs:label "数据表" ;
+    rdfs:comment "表级血缘的端点。DDL 真源在 rcp-ops/migrations，本类只登记存在性与归属，不复制列定义。" .
+
+rcp:Component a owl:Class ;
+    rdfs:label "基础设施组件" ;
+    rdfs:comment "消息中间件、缓存、外部 SaaS 等运行时前提。不是本平台实现的仓，但缺失即平台不可用。" .
+
+# ── 运行面 ──────────────────────────────────────────────────────────────────
+
+rcp:Environment a owl:Class ;
+    rdfs:label "运行环境" ;
+    rdfs:comment "运行环境（local / prod）。环境决定清单来源、凭据来源与可用的验证手段。" .
+
+rcp:Namespace a owl:Class ;
+    rdfs:label "命名空间" ;
+    rdfs:comment "集群内的资源隔离域。工作负载的落点，服务名解析的作用域。" .
+
+rcp:Workload a owl:Class ;
+    rdfs:label "工作负载" ;
+    rdfs:comment "K8s Deployment 等部署单元，来自 rcp-ops/k8s 清单。rcp:deployed_as 的端点。" .
+
+rcp:TrustBoundary a owl:Class ;
+    rdfs:label "信任边界" ;
+    rdfs:comment "跨边界调用必须带鉴权的判定域。比「对外入口唯一」更细：边界内互调与跨界调用不是同一类事实。" .
+
+# ── 决策与演进 ──────────────────────────────────────────────────────────────
+
+rcp:Adr a owl:Class ;
+    rdfs:label "架构决策记录" ;
+    rdfs:comment "一次有后果的选择。rcp:decidesOn 指向它产生的红线，使红线有出处；rcp:supersedes 表达取代关系。" .
+
+rcp:LifecycleState a owl:Class ;
+    rdfs:label "生命周期状态" ;
+    rdfs:comment "资产的生命周期状态。退役不再只是文档段落：已退役资产不得被调用或路由。" .
+
+rcp:QualityAttribute a owl:Class ;
+    rdfs:label "质量属性" ;
+    rdfs:comment "非功能约束（延迟、可用性）。沿调用图累加，是 calls 图除环检测外的第二种用途。" .
+
+# ── 生命周期状态个体 ────────────────────────────────────────────────────────
+# 与 kinds.ttl 的能力/种类个体同一性质：它们是词汇而不是某次登记的事实，
+# 因此留在 tbox；具体资产挂哪个状态由 abox 的 rcp:lifecycle 边给出。
+
+rcp:state-active a rcp:LifecycleState ;
+    rdfs:label "在用" ;
+    rcp:definition "已上线并承担运行时职责。可被调用、路由与依赖。" .
+
+rcp:state-deprecated a rcp:LifecycleState ;
+    rdfs:label "已弃用" ;
+    rcp:definition "仍可运行但禁止新增依赖方；新调用须先立替代方案。" .
+
+rcp:state-retired a rcp:LifecycleState ;
+    rdfs:label "已退役" ;
+    rcp:definition "代码与目录已删除。任何 calls / routes_to / depends_artifact 指向它都是漏清理。" .

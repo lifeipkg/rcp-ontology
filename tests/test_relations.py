@@ -67,9 +67,9 @@ def service(name, kind, relations_map=None, depends_on=None, port=8000, **extra)
     return base
 
 
-def test_relations_ttl_declares_six_graphs(relations):
+def test_relations_ttl_declares_seven_graphs(relations):
     assert set(relations["graphs"]) == {
-        "call", "data", "contract", "build", "deploy", "governance"
+        "call", "data", "contract", "build", "deploy", "delivery", "governance"
     }
     assert reachability_graphs(relations) == {"call"}
     assert relations["relations"]["calls"]["status"] == "enforced"
@@ -210,3 +210,19 @@ def test_exporter_marks_reachability_with_summary_edge(relations):
 def test_kind_class_normalises_kind_names():
     assert kind_class("worker") == "Worker"
     assert kind_class("meta") == "Meta"
+
+
+def test_architecture_relations_stay_out_of_reachability(relations):
+    """架构层关系不得进可达性图，也不得标 enforced。
+
+    进 call 图会让 E108/E109/E110 把部署、交付、治理边当成运行时依赖；
+    标 enforced 而登记里没有实例则会触发 W307 空转告警（新关系先立名后落地）。
+    """
+    architecture_layer = {
+        "in_boundary", "lifecycle", "decides_on", "supersedes", "promises",
+        "hosted_on", "deployed_to", "in_namespace", "includes", "enforces",
+    }
+    for name in sorted(architecture_layer):
+        spec = relations["relations"][name]
+        assert spec["graph"] != "call", f"{name} 混进了调用图"
+        assert spec["status"] == "declared", f"{name} 标了 enforced 但尚无实例"

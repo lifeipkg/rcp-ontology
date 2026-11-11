@@ -13,6 +13,12 @@
 直接改为查询 Graph 是一次独立重构，不属于本次收敛范围。在此之前必须注意：
 本模块的谓词映射与 ``abox.py`` 的还原映射**互为逆映射**，两边同时改才不会丢字段。
 
+一处例外：**架构层实例**（团队、契约、表、存储、工作负载、环境、命名空间、边界、
+流水线、门禁）不属于 services / libraries，字典视图不承载它们。这部分直接从
+``registry["abox_graph"]``（abox/ 的合并原图）并入，跳过已登记的服务主体——同一事实
+不建第二条产出路径。没有这条并入，``shapes/core.ttl`` 里针对架构资产的 E210–E213
+会全部空转。
+
 三元组形态：
     rcp:dataway         rdf:type          rcp:DataGateway ;
                         rcp:calls         rcp:api-gateway ;
@@ -199,6 +205,20 @@ def build_rdf(
         name = library.get("name")
         if name:
             _library_node(g, str(name), library)
+
+    # 架构层实例（团队、契约、表、存储、工作负载、环境、命名空间、边界、流水线、门禁）
+    # 不在 services/libraries 字典里，只能从 ABox 原图并入。已登记的服务/库主体跳过：
+    # 那部分已由上面的字典路径产出，同一事实不建第二条产出路径。
+    abox = registry.get("abox_graph")
+    if abox is not None:
+        covered = {
+            RCP[str(entry["name"])]
+            for entry in list(registry.get("services") or []) + list(registry.get("libraries") or [])
+            if entry.get("name")
+        }
+        for subject, predicate, obj in abox:
+            if subject not in covered:
+                g.add((subject, predicate, obj))
 
     tbox = concepts.get("tbox_graph")
     if tbox is not None:

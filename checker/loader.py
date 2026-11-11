@@ -28,7 +28,7 @@ from typing import Any
 
 from rdflib import DCTERMS, OWL, RDF, RDFS, Graph
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 
 # 各层的目录名（相对本体仓根的 ontology/）。
 ONTOLOGY_DIR = "ontology"
@@ -128,6 +128,10 @@ def load_registry(root: Path) -> dict[str, Any]:
         raise LoadError(str(exc)) from exc
     data.setdefault("services", [])
     data.setdefault("libraries", [])
+    # 原图一并返回：架构层实例（团队、契约、表、工作负载 …）不属于 services/libraries，
+    # 字典视图不承载它们，但导出与 SHACL 需要这些三元组。与 load_concepts 的
+    # tbox_graph 同一处理方式 —— 字典是视图，图才是真源。
+    data["abox_graph"] = graph
     return data
 
 

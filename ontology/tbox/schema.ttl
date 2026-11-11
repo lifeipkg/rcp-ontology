@@ -32,16 +32,18 @@
 <https://risk-control.platform/ontology>
     a owl:Ontology ;
     rdfs:label "平台本体" ;
-    owl:versionInfo "3.1.0" ;
-    owl:versionIRI <https://risk-control.platform/ontology/3.1.0> ;
+    owl:versionInfo "3.2.0" ;
+    owl:versionIRI <https://risk-control.platform/ontology/3.2.0> ;
     dcterms:hasPart
         "tbox/schema.ttl" ,
         "tbox/kinds.ttl" ,
         "tbox/capabilities.ttl" ,
+        "tbox/architecture.ttl" ,
         "tbox/relations.ttl" ,
         "tbox/terms.ttl" ,
         "abox/platform.ttl" ,
         "abox/services.ttl" ,
+        "abox/architecture.ttl" ,
         "policy/redlines.ttl" ,
         "shapes/core.ttl" ;
     rdfs:comment """本目录下的 TTL 是平台声明层的唯一真源；契约仓只保留接口契约（OpenAPI 与消息 schema）。
@@ -51,12 +53,14 @@
     schema.ttl        类与属性的词汇层（本体的骨架，含本体头）
     kinds.ttl         服务种类及其五个行为属性
     capabilities.ttl  能力立名与归属
+    architecture.ttl  架构层概念：归属、交付资产、数据资产、运行面、决策与生命周期
     relations.ttl     关系种类、分域图与端点约束
     terms.ttl         业务术语与概念的对应
 
   abox/    实例 —— 本平台登记了什么
     platform.ttl      平台标识、基座版本钉、服务发现
     services.ttl      服务、库、边、预期状态
+    architecture.ttl  架构层实例：团队、契约、表、存储、工作负载、边界、流水线
 
   policy/  规则 —— 什么算违规
     redlines.ttl      架构红线（spec 即执行参数）与例外登记
@@ -168,6 +172,20 @@ rcp:expected a owl:ObjectProperty ; rdfs:domain rcp:Service .
 rcp:stack    a owl:ObjectProperty ; rdfs:domain rcp:Platform ; rdfs:range rcp:StackBaseline .
 rcp:discovery a owl:ObjectProperty ; rdfs:domain rcp:Platform ; rdfs:range rcp:ServiceDiscovery .
 rcp:spec     a owl:ObjectProperty ; rdfs:domain rcp:Redline .
+
+# ── 属性：架构层数据属性 ─────────────────────────────────────────────────────
+# 架构层的「边」不在这里声明：作为登记事实的关系（归属、部署、血缘、决策）
+# 一律进 tbox/relations.ttl，那里才承载 graph / status / targetKind。
+# 本区只放不构成边的属性（资产自身的标量事实）。
+
+rcp:path        a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:version     a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:vendor      a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:decision    a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:decidedOn   a owl:DatatypeProperty ; rdfs:range xsd:date .
+rcp:metric      a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:targetValue a owl:DatatypeProperty ; rdfs:range xsd:string .
+rcp:job         a owl:DatatypeProperty ; rdfs:range xsd:string .
 
 # ── 属性：数据类型属性 ───────────────────────────────────────────────────────
 

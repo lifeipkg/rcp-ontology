@@ -3,7 +3,7 @@
 平台的**声明层唯一真源**：`ontology/` 下的 TTL 就是全部事实，没有第二种格式。
 它回答四类问题：
 
-1. **有哪些种类的东西** —— 服务种类、能力、关系（`tbox/`）
+1. **有哪些种类的东西** —— 服务种类、能力、关系、架构资产（`tbox/`）
 2. **本平台登记了什么** —— 服务、库、端口、边、版本钉（`abox/`）
 3. **什么算违规** —— 架构红线的执行参数与例外（`policy/`）
 4. **这堆节点放在一起是否自洽** —— 环、不可达、能力归属、形状约束（检查器）
@@ -18,11 +18,13 @@ ontology/
 │   ├── schema.ttl        类与属性的词汇层（本体的骨架）+ 本体头（身份与文件清单）
 │   ├── kinds.ttl         服务种类 + 五个行为属性
 │   ├── capabilities.ttl  能力立名与归属
-│   ├── relations.ttl     关系种类、六张分域图、端点约束
+│   ├── architecture.ttl  架构层概念：团队、契约、表、存储、工作负载、边界、门禁、ADR、生命周期
+│   ├── relations.ttl     关系种类、七张分域图、端点约束
 │   └── terms.ttl         业务术语与概念的对应
 ├── abox/                 实例 —— 本平台登记了什么
 │   ├── platform.ttl      平台标识、版本基线、服务发现
-│   └── services.ttl      服务、库、边、预期状态
+│   ├── services.ttl      服务、库、边、预期状态
+│   └── architecture.ttl  架构层实例：团队、契约、表、存储、工作负载、命名空间、环境、流水线、门禁、边界
 ├── policy/               规则 —— 什么算违规
 │   └── redlines.ttl      架构红线（spec 即执行参数）+ 例外登记
 └── shapes/               约束 —— 图形状
@@ -34,6 +36,28 @@ ontology/
 本体头（`owl:Ontology` + `owl:versionIRI` + `dcterms:hasPart`）写在 `tbox/schema.ttl` 里，
 属于本体图本身——它会被装载、被 `export` 输出、被任何 RDF 工具读到，不是图外的配置文件。
 E119 校验它与磁盘一致。
+
+## 架构层：概念描述「生产要素」，不描述业务领域
+
+`tbox/architecture.ttl` 与 `abox/architecture.ttl` 装的是平台自身的构成物，判定边界是：
+**能被「改一次代码 / 删一个仓 / 换一次部署 / 退一次役」直接影响，且不是服务种类。**
+
+| 分组 | 类 | 解决的问题 |
+|---|---|---|
+| 组织 | `Team` | `owner` 字面量实体化，治理图才有归属节点 |
+| 交付 | `Contract` `Pipeline` `Gate` | 契约成为可挂版本与消费方的实体；`Gate` 让「红线有没有执行通道」可判 |
+| 数据 | `Datastore` `Table` `Component` | `reads_table` / `writes_table` 终于有端点类，改表可反查 |
+| 运行 | `Environment` `Namespace` `Workload` `TrustBoundary` | `deployed_as` 有终点；跨界调用与边界内互调可区分 |
+| 演进 | `Adr` `LifecycleState` `QualityAttribute` | 红线有决策出处；退役不再只是 README 段落 |
+
+两条硬边界：
+
+- 这些类都**不** `rdfs:subClassOf rcp:Service`。它们无端口、不探活、不参与可达性，
+  挂上 `Service` 会被服务形状误判为「缺端口」。对应的边一律进非可达性图（数据/契约/
+  部署/交付/治理），**不进 call 图** —— `test_relations.py` 有护栏守着。
+- `Adr` 与 `QualityAttribute` 只立名、暂无实例：现有 5 条红线的决策时间与决策人不在
+  仓内留存，本平台也未做运行时标定，写任何目标值都会变成不可验证的承诺。真实记录
+  落地时补 `abox/architecture.ttl` 的实例即可，不需要改 TBox。
 
 ## 为什么全是 TTL
 
@@ -83,6 +107,10 @@ E119 校验它与磁盘一致。
 汇总边是子属性推演的物化结果，由单一事实导出、不回写，因此不是第二份真源。
 **真源里不写汇总边** —— 写进去等于把推导结论当事实。
 
+导出范围含架构层实例（团队、契约、表、工作负载、边界、流水线门禁），它们不经字典视图，
+由 `abox/` 合并原图直接并入。这是 E210–E213 能命中的前提：形状只对导出图生效，
+实例不进图，形状就只是装饰。
+
 ## 用法
 
 ```bash
@@ -102,7 +130,8 @@ python checker/cli.py check --contracts ../rcp-contracts -w .. --baseline origin
 python checker/cli.py check --contracts ../rcp-contracts -w .. \
   --baseline origin/main --checker-ref HEAD~1
 
-# 改一个服务之前，先看它会波及谁（--graph 选域：call/data/contract/build/deploy/governance）
+# 改一个服务之前，先看它会波及谁
+# （--graph 选域：call / data / contract / build / deploy / delivery / governance）
 python checker/cli.py impact --service dataway
 python checker/cli.py impact --service dataway --graph data
 
@@ -143,6 +172,10 @@ python -m pytest -q
 | E107 | 工作区存在 `rcp-*` 目录但未登记（或反之，仅完整工作区判后者） | Python | error |
 | E201 | kind 未在 TBox 声明 | SHACL | error |
 | E202 | capability 未在 TBox 立名 | SHACL | error |
+| E210 | 架构资产（团队/契约/表/存储/工作负载/流水线/门禁/环境/命名空间/边界/组件）缺 owner | SHACL | error |
+| E211 | 契约资产缺 `path` 或 `version`（无法与磁盘对表、无法判破坏性变更） | SHACL | error |
+| E212 | 工作负载未声明所属环境（`deployed_to`） | SHACL | error |
+| E213 | ADR 缺 `decision` 正文或 `decidedOn` 日期 | SHACL | error |
 
 ### 图与公理
 
